@@ -11,6 +11,7 @@ import hashlib
 import os
 import shlex
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -42,14 +43,26 @@ class GateResult:
     # sends both agents hunting for a broken test that does not exist.
     timed_out: bool = False
     timeout: int = 0
+    # Seconds the run took, kept with a pass in .duet/gate-cache.json.
+    duration: float = 0.0
+    # Set when this is a pass from an earlier session rather than a run made
+    # now: when it happened, in words. Only ever the opening check — see
+    # duet/gate_cache.py for why nothing is counted against it.
+    remembered: str = ""
 
     def headline(self) -> str:
         """"PASSED", "FAILED (exit 1)", or that the gate never finished."""
+        if self.ok and self.remembered:
+            return "PASSED (%s)" % self.remembered_note()
         if self.ok:
             return "PASSED"
         if self.timed_out:
             return "TIMED OUT — " + self.timeout_note()
         return "FAILED (exit %d)" % self.exit_code
+
+    def remembered_note(self) -> str:
+        return ("remembered from %s, same files, same command; --fresh-gate to rerun"
+                % self.remembered)
 
     def timeout_note(self) -> str:
         return ("the gate ran out of time after %s; this is not a test failure"
@@ -369,6 +382,7 @@ class Workspace:
         """Run the acceptance command. Neither agent gets to skip this."""
         if not self.gate:
             return GateResult(command="", ok=True, exit_code=0, output="", skipped=True)
+        started = time.monotonic()
         try:
             proc = subprocess.run(
                 self.gate,
@@ -402,6 +416,7 @@ class Workspace:
             ok=proc.returncode == 0,
             exit_code=proc.returncode,
             output=output,
+            duration=time.monotonic() - started,
         )
 
 

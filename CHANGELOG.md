@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Added: gate passes are remembered across sessions. Every session and every
+  `duet resume` used to run the whole gate before round 1, even over files that had
+  just passed that same gate — 5 to 15 minutes on a loaded machine before an agent
+  did anything. A pass is now stored in `.duet/gate-cache.json` under the workspace
+  digest and the exact gate command, and the opening check reuses one younger than
+  24 hours, saying "gate passed (remembered from …, same files, same command;
+  --fresh-gate to rerun)" to the user and in both prompts. Failures and time-outs
+  are never stored or reused, and sign-offs are still counted only against a gate
+  run during the session. `--fresh-gate` on every session command and on
+  `duet resume` ignores the cache; `duet verify` always runs the gate fresh. A
+  corrupt or unreadable cache file is ignored.
+
 ## 0.8.0
 
 - Fixed: signing Codex in again with a different ChatGPT account still reported the

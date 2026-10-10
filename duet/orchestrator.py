@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from duet import page, prompts, workflows
+from duet import gate_cache, page, prompts, workflows
 from duet.adapters import build as build_adapter
 from duet.adapters.base import (
     DEFAULT_TURN_TIMEOUT,
@@ -171,6 +171,9 @@ class Orchestrator:
         self.pending_refused: Dict[str, List[str]] = {}
         self.last_envelope: Dict[str, Envelope] = {}
         self._gate_cache: Dict[str, GateResult] = {}
+        # Passes from earlier sessions, shown for the opening check and kept
+        # apart from _gate_cache so no sign-off is ever counted against one.
+        self._remembered: Dict[str, GateResult] = {}
         # One warning per session is enough; see _check_gate_is_read_only.
         self._gate_mutation_warned = False
         # The rule this session is held to, if any, beyond the double sign-off.
@@ -253,6 +256,7 @@ class Orchestrator:
                 self.emit("gate_start", command=self.workspace.gate, digest=digest)
             result = self.workspace.run_gate()
             self._gate_cache[digest] = result
+            gate_cache.remember(self.config.root, digest, result)
             if self.workflow:
                 self.workflow.on_gate(self.config.workflow_state, digest, result.ok)
             if self.workspace.gate:
@@ -260,6 +264,36 @@ class Orchestrator:
                           timed_out=result.timed_out, timeout=result.timeout)
                 self._check_gate_is_read_only(digest)
         return self._gate_cache[digest]
+
+    def opening_gate(self, digest: str) -> GateResult:
+        """The gate before round 1: a pass remembered from another session, if any.
+
+        Same digest, same command, under a day old, and not `--fresh-gate` —
+        otherwise the gate runs as it always has. The remembered result is shown
+        to the agents and in the terminal for what it is, and is never put in
+        `_gate_cache`: the turn's own gate, the one sign-offs are counted
+        against, still runs during this session.
+        """
+        if digest in self._gate_cache or digest in self._remembered:
+            return self.shown_gate(digest)
+        if self.workspace.gate and not self.config.fresh_gate:
+            remembered = gate_cache.recall(self.config.root, digest, self.workspace.gate)
+            if remembered is not None:
+                self._remembered[digest] = remembered
+                if self.workflow:
+                    self.workflow.on_gate(self.config.workflow_state, digest, True)
+                self.emit("gate_remembered", command=remembered.command, digest=digest,
+                          when=remembered.remembered, duration=remembered.duration)
+                return remembered
+        return self.gate_for(digest)
+
+    def shown_gate(self, digest: str) -> GateResult:
+        """What the agents are shown: this session's run, else a remembered pass."""
+        if digest in self._gate_cache:
+            return self._gate_cache[digest]
+        if digest in self._remembered:
+            return self._remembered[digest]
+        return self.gate_for(digest)
 
     def _check_gate_is_read_only(self, before: str) -> None:
         """Say so if running the gate changes the workspace.
@@ -284,7 +318,7 @@ class Orchestrator:
     def _build_prompt(self, agent: str, round_no: int, directive: str, digest: str) -> str:
         peer = self.state.peer_of(agent)
         peer_env = self.last_envelope.get(peer)
-        gate = self.gate_for(digest)
+        gate = self.shown_gate(digest)
         files: Dict[str, str] = {}
         for path in self.pending_reads.pop(agent, [])[:12]:
             files[path] = self.workspace.read(path)
@@ -755,7 +789,12 @@ class Orchestrator:
                 agent = order[(round_no - 1) % len(order)]
                 peer = self.state.peer_of(agent)
                 digest = self.workspace.digest()
-                gate = self.gate_for(digest)
+                # Only the opening check may be remembered from another
+                # session; every later one is this session's own run.
+                if round_no == self.start_round:
+                    gate = self.opening_gate(digest)
+                else:
+                    gate = self.gate_for(digest)
 
                 directive = self.pending_directive.pop(agent, "")
                 if not directive:

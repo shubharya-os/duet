@@ -56,6 +56,11 @@ GATE_TIMEOUT_HELP = (
     "time, not as failing tests, and it never counts as green."
     % human_duration(DEFAULT_GATE_TIMEOUT)
 )
+FRESH_GATE_HELP = (
+    "run the gate before round 1 even if .duet/gate-cache.json remembers a pass "
+    "for these exact files and this command from the last 24 hours. Sign-offs are "
+    "always counted against a gate run during the session, with or without it."
+)
 
 
 # --------------------------------------------------------------------------
@@ -147,6 +152,10 @@ def make_reporter(agents: List[str], verbose: bool = True, as_json: bool = False
                 say("     " + ui.dim("fs: " + line))
         elif kind == "gate_start":
             say("     " + ui.dim("running gate: %s" % event.get("command")))
+        elif kind == "gate_remembered":
+            say("     " + ui.green("gate passed") + ui.dim(
+                " (remembered from %s, same files, same command; --fresh-gate to rerun)"
+                % event.get("when")))
         elif kind == "gate_done":
             if event.get("ok"):
                 say("     " + ui.green("gate passed"))
@@ -328,6 +337,7 @@ def build_config(args: argparse.Namespace) -> Config:
         cfg.workflow = args.workflow
     if getattr(args, "allow_run", ""):
         cfg.allow_run = args.allow_run
+    cfg.fresh_gate = bool(getattr(args, "fresh_gate", False))
     if getattr(args, "quick", False):
         cfg.workflow_state["quick"] = True
     if getattr(args, "jury", False):
@@ -1921,6 +1931,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
     gate_timeout = gate_timeout_seconds(args)
     if gate_timeout is not None:
         cfg.gate_timeout = gate_timeout
+    # Never carried over: whether to trust a remembered pass is a choice about
+    # this run, and a resume is usually over files nobody has touched since.
+    cfg.fresh_gate = bool(getattr(args, "fresh_gate", False))
 
     reason, fixes = _resume_blocker(data, path.name, cfg.max_rounds)
     if reason:
@@ -1999,7 +2012,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
                            ", ".join(sorted(orch.state.signoffs)) or ui.dim("nobody yet")))
         for note in notes:
             print("  " + ui.yellow("note: ") + note)
-        print(ui.dim("  the gate runs again before the first new turn — the workspace can "
+        print(ui.dim("  the gate is checked again before the first new turn — the workspace can "
                      "have changed while the session was dead."))
 
     result = orch.run()
@@ -2427,6 +2440,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--rounds", type=int, help="maximum rounds (default 12)")
     p_run.add_argument("--turn-timeout", type=int, metavar="MINUTES", help=TURN_TIMEOUT_HELP)
     p_run.add_argument("--gate-timeout", type=int, metavar="MINUTES", help=GATE_TIMEOUT_HELP)
+    p_run.add_argument("--fresh-gate", action="store_true", help=FRESH_GATE_HELP)
     p_run.add_argument("--max-debate", type=int, help="rounds an issue may stay open before arbitration (default 3)")
     p_run.add_argument(
         "--pair",
@@ -2463,6 +2477,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--rounds", type=int, help="maximum rounds (default 12)")
         p.add_argument("--turn-timeout", type=int, metavar="MINUTES", help=TURN_TIMEOUT_HELP)
         p.add_argument("--gate-timeout", type=int, metavar="MINUTES", help=GATE_TIMEOUT_HELP)
+        p.add_argument("--fresh-gate", action="store_true", help=FRESH_GATE_HELP)
         p.add_argument("--max-debate", type=int,
                        help="rounds an issue may stay open before arbitration (default 3)")
         p.add_argument("--pair", metavar="A+B", help="which two agents, and who leads")
@@ -2616,6 +2631,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_resume.add_argument("--gate-timeout", type=int, metavar="MINUTES",
                           help=GATE_TIMEOUT_HELP + " Without it, the limit the dead "
                                "session was started with is kept.")
+    p_resume.add_argument("--fresh-gate", action="store_true", help=FRESH_GATE_HELP)
     p_resume.add_argument("--rounds", type=int, metavar="N",
                           help="new total round budget, counting the rounds already used")
     p_resume.add_argument("--gate", metavar="CMD",

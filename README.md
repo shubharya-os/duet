@@ -705,7 +705,7 @@ duet sessions        # every session in this workspace
 ```
 
 Useful flags for `run`: `--gate` (your tests — the most valuable one), `--pair`,
-`--rounds`, `--turn-timeout MINUTES`, `--gate-timeout MINUTES`, `--accept "what done means"`, `--swap N` to
+`--rounds`, `--turn-timeout MINUTES`, `--gate-timeout MINUTES`, `--fresh-gate`, `--accept "what done means"`, `--swap N` to
 trade places, `--commit`, `--json`.
 
 ### The clock, and the network
@@ -721,6 +721,19 @@ it, saved with the session like the turn limit. A gate that runs out of time is
 reported as exactly that — "the gate ran out of time; this is not a test failure",
 to you and to both agents — so nobody goes looking for a failing test that does not
 exist. It still is not a pass: a session cannot end on a gate that never finished.
+
+A gate that passes is remembered in `.duet/gate-cache.json`, keyed by the digest of
+the workspace and the exact gate command, with when it ran, how long it took and its
+output. A session — new or resumed — that opens on the same files with the same
+command within 24 hours skips the opening run and says so: "gate passed (remembered
+from 2026-10-10 09:12 (2 hours ago), same files, same command; --fresh-gate to
+rerun)". Both agents see the remembered output, labelled the same way. That is all
+it does: a failure or a time-out is never remembered, other files or another command
+never match, and the gate a sign-off is counted against is always one run during the
+session, so the pair still cannot finish without a fresh green run. `--fresh-gate`
+on any session command or on `duet resume` ignores the cache for that run;
+`duet verify` always runs the gate fresh. A cache file that is corrupt or unreadable
+is treated as empty.
 
 If a turn is cut off after it has changed the workspace, that is progress and not
 a failure: the peer takes the next turn on the files it left, and is told the
@@ -752,8 +765,10 @@ duet resume --gate "pytest -q"     # a different gate than the one it recorded
 With no id it takes the newest session that has not agreed yet, saying which
 newer ones it stepped over and why. It refuses, and names what to type instead,
 when that session already agreed, has no rounds left, saved no state, or does
-not exist. The gate is re-run before the first new turn, because the workspace
-can have changed while the session was dead.
+not exist. The gate is checked again before the first new turn, because the
+workspace can have changed while the session was dead — from the gate cache when
+the files and the command are exactly those of a pass in the last day, otherwise
+by running it (`--fresh-gate` to always run it).
 
 ---
 
@@ -783,7 +798,7 @@ pipe.
 Four of those were found by pointing duet's own ChatGPT side at duet's core and asking
 for correctness bugs. All four were real. That's the premise working on its author.
 
-709 tests, no network or credentials needed. CI on Python 3.9, 3.11 and 3.13.
+725 tests, no network or credentials needed. CI on Python 3.9, 3.11 and 3.13.
 
 ```bash
 pytest -q

@@ -163,6 +163,10 @@ class Config:
     jury_panel: str = ""
     jury_max: int = 2
     jury_convened: int = 0
+    # `--fresh-gate`: run the opening gate even when .duet/gate-cache.json
+    # remembers a pass for these files and this command. Set per invocation —
+    # `duet resume` takes it from its own flags, not from the saved session.
+    fresh_gate: bool = False
 
     @property
     def agent_names(self) -> List[str]:
