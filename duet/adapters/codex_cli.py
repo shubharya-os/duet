@@ -22,10 +22,14 @@ from duet.adapters.base import (
     RUNTIME_FIX,
     Adapter,
     AgentReply,
+    TIMED_OUT,
     Probe,
     env_with_sibling_path,
     human_duration,
     looks_unrunnable,
+    run_status_check,
+    timed_out_detail,
+    timed_out_warning,
 )
 
 DEFAULT_CANDIDATES = (
@@ -226,10 +230,9 @@ def read_login_status(binary, timeout: int = 45) -> Tuple[Optional[bool], str]:
     for env in (None, env_with_sibling_path(first)):
         try:
             argv = list(binary) if isinstance(binary, (list, tuple)) else [binary]
-            proc = subprocess.run(
-                argv + ["login", "status"], capture_output=True, text=True,
-                timeout=timeout, env=env,
-            )
+            proc = run_status_check(argv + ["login", "status"], timeout, env)
+        except subprocess.TimeoutExpired:
+            return None, timed_out_detail("codex login status", timeout)
         except (OSError, subprocess.SubprocessError) as exc:
             return None, str(exc)
         out = ((proc.stdout or "") + (proc.stderr or "")).strip()
@@ -404,6 +407,16 @@ class CodexCliAdapter(Adapter):
             self.turns = 0
 
     @classmethod
+    def after_login(cls, launch, exit_code: int) -> None:
+        # The usage-limit note belongs to whichever account hit the limit, and
+        # duet cannot tell whether this sign-in was that account or another one.
+        # Keeping it reported a freshly signed-in account as out of quota until
+        # the old account's reset; a turn that is really limited writes it back.
+        # Only a sign-in that worked: a failed or cancelled one changed nothing.
+        if exit_code == 0 and read_login_status(launch)[0] is True:
+            clear_usage_limit()
+
+    @classmethod
     def probe(cls, config: Optional[Dict[str, Any]] = None) -> Probe:
         # The probe has to resolve the command the same way a turn does, or
         # doctor reports "not found" for a CLI that runs perfectly well through
@@ -420,7 +433,14 @@ class CodexCliAdapter(Adapter):
         if logged_in is False:
             return Probe(ok=False, detail="installed but not signed in (%s)" % detail,
                          fix=LOGIN_HINT, signed_in=False)
-        if logged_in is None:
+        signed_in: Optional[bool] = True
+        warning = ""
+        if logged_in is None and detail.startswith(TIMED_OUT):
+            # Out of time is unknown, not signed out — the same mistake that
+            # refused a signed-in Claude under load. Go on to the quota note,
+            # which is still worth reporting, but never advise a login.
+            signed_in, warning, detail = None, timed_out_warning(detail), "sign-in not confirmed"
+        elif logged_in is None:
             if detail.startswith("could not run"):
                 return Probe(ok=False, detail="installed at %s, but %s" % (where, detail),
                              fix=RUNTIME_FIX)
@@ -435,10 +455,11 @@ class CodexCliAdapter(Adapter):
             resets_at = note.get("resets_at")
             seen = _when(note.get("seen_at"))
             path = state_dir() / QUOTA_NOTE
-            if isinstance(resets_at, (int, float)):
+            if isinstance(resets_at, (int, float)) and signed_in is not None:
                 return Probe(
                     ok=False,
-                    signed_in=True,          # so `duet login` does not open a browser
+                    signed_in=signed_in,     # so `duet login` does not open a browser
+                    warning=warning,
                     detail="signed in, but out of Codex usage quota until %s "
                            "(the account said so at %s)" % (_when(resets_at), seen),
                     fix="wait for %s, upgrade the plan at "
@@ -446,12 +467,27 @@ class CodexCliAdapter(Adapter):
                         "way: %s\n    If that reset has already passed, delete %s."
                         % (_when(resets_at), OTHER_PAIRS, path),
                 )
+            if isinstance(resets_at, (int, float)):
+                # The sign-in check itself timed out, so "signed in" is not
+                # something duet actually knows — refusing on the old note
+                # would be the same mistake as reading a timeout as signed out,
+                # just dressed up as a quota message instead of a login hint.
+                return Probe(
+                    ok=True,
+                    signed_in=signed_in,
+                    warning="%s Also, a usage limit was recorded until %s (at %s); if the "
+                            "first turn stops again, %s  (clears itself on the next "
+                            "turn that succeeds; or delete %s)"
+                            % (warning, _when(resets_at), seen, OTHER_PAIRS, path),
+                    detail="%s (%s) — Codex usage quota not checked" % (detail, where),
+                )
             # Unknown is not the same as exhausted, and a hard failure here would
             # block the one thing that can settle it: the note only ever clears
             # on a turn that succeeds, and `duet run` refuses on a failed probe.
             return Probe(
                 ok=True,
-                signed_in=True,
+                signed_in=signed_in,
+                warning=warning,
                 detail="%s (%s) — Codex usage quota not checked.\n"
                        "    duet hit the usage limit at %s and codex named no reset "
                        "time, so it may still be in force: if the first ChatGPT turn "
@@ -461,7 +497,8 @@ class CodexCliAdapter(Adapter):
             )
         return Probe(
             ok=True,
-            signed_in=True,
+            signed_in=signed_in,
+            warning=warning,
             detail="%s (%s) — Codex usage quota not checked "
                    "(reading it would cost a model call)" % (detail, where),
         )

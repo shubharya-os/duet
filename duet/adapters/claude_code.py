@@ -20,10 +20,14 @@ from duet.adapters.base import (
     RUNTIME_FIX,
     Adapter,
     AgentReply,
+    TIMED_OUT,
     Probe,
     env_with_sibling_path,
     human_duration,
     looks_unrunnable,
+    run_status_check,
+    timed_out_detail,
+    timed_out_warning,
 )
 
 DEFAULT_CANDIDATES = (
@@ -52,10 +56,9 @@ def read_auth_status(binary, timeout: int = 45) -> Tuple[Optional[bool], str]:
     for env in (None, env_with_sibling_path(first)):
         try:
             argv = list(binary) if isinstance(binary, (list, tuple)) else [binary]
-            proc = subprocess.run(
-                argv + ["auth", "status"], capture_output=True, text=True,
-                timeout=timeout, env=env,
-            )
+            proc = run_status_check(argv + ["auth", "status"], timeout, env)
+        except subprocess.TimeoutExpired:
+            return None, timed_out_detail("claude auth status", timeout)
         except (OSError, subprocess.SubprocessError) as exc:
             return None, str(exc)
         out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
@@ -263,6 +266,11 @@ class ClaudeCodeAdapter(Adapter):
         logged_in, detail = read_auth_status(launch)
         if logged_in is False:
             return Probe(ok=False, detail="installed but %s" % detail, fix=LOGIN_HINT)
+        if logged_in is None and detail.startswith(TIMED_OUT):
+            # Out of time is unknown, not signed out: refusing here stopped a
+            # signed-in session and advised a login that could not help.
+            return Probe(ok=True, detail="installed (%s), sign-in not confirmed" % where,
+                         warning=timed_out_warning(detail))
         if logged_in is None:
             # A CLI that cannot start is not a CLI that is signed out, and this
             # has to be decided before falling back to --version, which fails

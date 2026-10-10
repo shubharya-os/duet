@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -203,6 +204,36 @@ def env_with_sibling_path(binary: str, env: Optional[Dict[str, str]] = None) -> 
     return env
 
 
+# How a status reader says "this check ran out of time". A slow answer is not
+# a "no": on a machine under heavy load `claude auth status` has taken longer
+# than 45 seconds for an account that was signed in, and reading that as signed
+# out refused the session and sent the user to a login they did not need.
+TIMED_OUT = "timed out"
+
+
+def run_status_check(argv: List[str], timeout: int, env: Optional[Dict[str, str]] = None):
+    """Run a sign-in status command, giving it one longer second chance.
+
+    Raises subprocess.TimeoutExpired only when the retry ran out of time too;
+    the caller reports that as unknown, never as signed out.
+    """
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env)
+    except subprocess.TimeoutExpired:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout * 3, env=env)
+
+
+def timed_out_detail(what: str, timeout: int) -> str:
+    return "%s: `%s` did not answer in %ds, nor in %ds on a retry" % (
+        TIMED_OUT, what, timeout, timeout * 3)
+
+
+def timed_out_warning(detail: str) -> str:
+    return ("the sign-in check could not finish (%s). That is usually a heavily "
+            "loaded machine, not a sign-out, so the session starts anyway; if it "
+            "really is signed out, the first turn will say so." % detail)
+
+
 RUNTIME_FIX = (
     "that CLI could not start at all, so its sign-in state is unknown. It is "
     "usually a broken `node` earlier on PATH than the working one — check "
@@ -226,6 +257,10 @@ class Probe:
     detail: str
     fix: str = ""
     signed_in: Optional[bool] = None
+    # Something worth saying that does not stop a session: `ok` stays True and
+    # this is shown beside it. A sign-in check that only ran out of time is the
+    # case that needs it.
+    warning: str = ""
 
 
 class Adapter:
@@ -290,6 +325,14 @@ class Adapter:
     @classmethod
     def probe(cls, config: Optional[Dict[str, Any]] = None) -> Probe:
         return Probe(ok=False, detail="no probe implemented for %s" % cls.backend)
+
+    @classmethod
+    def after_login(cls, launch: Sequence[str], exit_code: int) -> None:
+        """Called by `duet login` once this backend's own sign-in has run.
+
+        Anything duet remembered about the account signed in before may not be
+        true of the one signed in now.
+        """
 
     def describe(self) -> str:
         return "%s (%s%s)" % (self.display, self.backend, ", " + self.model if self.model else "")
