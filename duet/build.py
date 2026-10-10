@@ -363,23 +363,49 @@ def run_command(root: str) -> str:
     except OSError:
         return ""
     in_section = in_block = False
+    # An indented code block (four spaces or a tab) is as much a code block as
+    # a fenced one, but only where Markdown makes it one: it cannot interrupt a
+    # paragraph, and inside a list an indented line continues the list item.
+    # `previous` is the last line's kind: "blank", "text", "list" or "code".
+    previous = "blank"
     for line in lines:
-        if not in_block and line.lstrip().startswith("#"):
+        indented = line.startswith(("    ", "\t"))
+        # A heading is indented at most three spaces; `    # install` is a
+        # comment inside an indented code block, not a heading.
+        if not in_block and not indented and line.lstrip().startswith("#"):
             in_section = bool(RUN_HEADING.match(line.strip()))
+            previous = "blank"
             continue
         if in_section and line.strip().startswith("```"):
             if in_block:
                 return ""          # an empty block; do not look further
             in_block = True
             continue
-        if in_block:
-            command = line.strip()
-            if command and not command.startswith("#"):
-                command = command[2:] if command.startswith("$ ") else command
-                # `python3 run.py   # http://127.0.0.1:8000/` — the comment is
-                # for the reader of the README, not part of the command.
-                return re.sub(r"\s+#.*$", "", command)
+        if not line.strip():
+            previous = "blank" if previous != "list" else "list"
+            continue
+        if in_block or (in_section and indented and previous in ("blank", "code")):
+            previous = "code"
+            command = _command_in(line)
+            if command:
+                return command
+            continue
+        if re.match(r"\s{0,3}([-*+]|\d+[.)])\s", line) or (indented and previous == "list"):
+            previous = "list"
+        else:
+            previous = "text"
     return ""
+
+
+def _command_in(line: str) -> str:
+    """The command on one line of a code block, or "" for a comment or nothing."""
+    command = line.strip()
+    if not command or command.startswith("#"):
+        return ""
+    command = command[2:] if command.startswith("$ ") else command
+    # `python3 run.py   # http://127.0.0.1:8000/` — the comment is
+    # for the reader of the README, not part of the command.
+    return re.sub(r"\s+#.*$", "", command)
 
 
 def summarise(root: str, seconds: float, gate: str) -> None:

@@ -52,6 +52,8 @@ BACKEND_ALIASES: Dict[str, "tuple"] = {
 }
 
 DEFAULT_PAIR = "claude+codex"
+# Seconds one run of the acceptance gate may take before it is stopped.
+DEFAULT_GATE_TIMEOUT = 900
 
 
 def ensure_distinct_names(agents: List["AgentSpec"]) -> List["AgentSpec"]:
@@ -131,7 +133,9 @@ class Config:
     decider: str = ""
     gate: str = ""
     gate_was_detected: bool = False
-    gate_timeout: int = 900
+    # Seconds. Saved with the session like `turn_timeout`, so `--gate-timeout`
+    # given to a session is kept by `duet resume`.
+    gate_timeout: int = DEFAULT_GATE_TIMEOUT
     # How long one agent's turn may take, in seconds. 0 means each backend's own
     # default. It is on the config — not only on the agent options — so that
     # `--turn-timeout` is saved with the session and `duet resume` keeps it;

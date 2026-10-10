@@ -256,7 +256,8 @@ class Orchestrator:
             if self.workflow:
                 self.workflow.on_gate(self.config.workflow_state, digest, result.ok)
             if self.workspace.gate:
-                self.emit("gate_done", ok=result.ok, exit_code=result.exit_code, digest=digest)
+                self.emit("gate_done", ok=result.ok, exit_code=result.exit_code, digest=digest,
+                          timed_out=result.timed_out, timeout=result.timeout)
                 self._check_gate_is_read_only(digest)
         return self._gate_cache[digest]
 
@@ -305,7 +306,7 @@ class Orchestrator:
             against_you=self.state.issues_against(agent),
             yours=[i for i in self.state.open_issues() if i.raised_by == agent],
             history=self.history,
-            why_open=self.state.why_not_done(digest, gate.ok),
+            why_open=self.state.why_not_done(digest, gate.ok, gate.problem()),
             directive=directive,
             files=files or None,
             patch_log=self.pending_patch_log.pop(agent, None),
@@ -500,7 +501,8 @@ class Orchestrator:
                 record.ingest or "no issue changes",
                 " | %d file(s) written" % len(patch_log) if patch_log else "",
                 " | %d call(s) refused" % len(refused) if refused else "",
-                " | gate %s" % ("PASS" if gate.ok else "FAIL") if self.workspace.gate else "",
+                " | gate %s" % ("PASS" if gate.ok else "TIMED OUT" if gate.timed_out else "FAIL")
+                if self.workspace.gate else "",
             )
         )
         self.emit(
@@ -515,6 +517,7 @@ class Orchestrator:
             ingest=record.ingest,
             digest=digest_after,
             gate_ok=gate.ok,
+            gate_timed_out=gate.timed_out,
             message=env.message,
             notes=env.notes,
             refused=refused,
@@ -734,6 +737,9 @@ class Orchestrator:
             # original baseline rather than retaking it from wherever it died.
             # The gate goes in too — a replay against the baseline runs it.
             cfg.workflow_state.setdefault("gate", cfg.gate)
+            # Not setdefault: `duet resume --gate-timeout` raises it for the
+            # replay as well as for the gate.
+            cfg.workflow_state["gate_timeout"] = cfg.gate_timeout
             self.workflow.begin(cfg.root, cfg.workflow_state)
 
         status, reason = STATUS_EXHAUSTED, "reached the %d-round limit" % cfg.max_rounds
@@ -981,7 +987,11 @@ class Orchestrator:
                              % (item.get("round"), item.get("issue_id"), item.get("decider"), item.get("ruling")))
         if result.status != STATUS_CONSENSUS:
             lines += ["", "## What is left", ""]
-            reasons = self.state.why_not_done(result.digest, bool(result.gate and result.gate.ok))
+            if result.gate:
+                reasons = self.state.why_not_done(result.digest, result.gate.ok,
+                                                  result.gate.problem())
+            else:
+                reasons = self.state.why_not_done(result.digest, False)
             lines += ["- %s" % r for r in reasons] or ["- nothing recorded"]
             if open_issues:
                 lines.append("")

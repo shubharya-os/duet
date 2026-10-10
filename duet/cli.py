@@ -26,6 +26,7 @@ from duet import from_ecc
 from duet import jury
 from duet.config import (
     BACKEND_ALIASES,
+    DEFAULT_GATE_TIMEOUT,
     DEFAULT_PAIR,
     AgentSpec,
     Config,
@@ -48,6 +49,12 @@ TURN_TIMEOUT_HELP = (
     "(default %s). It is stated to both agents as their budget, and a turn cut "
     "off after it changed the workspace hands over to the peer instead of "
     "failing the session." % human_duration(DEFAULT_TURN_TIMEOUT)
+)
+GATE_TIMEOUT_HELP = (
+    "minutes one run of the acceptance gate may take before it is stopped "
+    "(default %s). A gate stopped at its limit is reported as having run out of "
+    "time, not as failing tests, and it never counts as green."
+    % human_duration(DEFAULT_GATE_TIMEOUT)
 )
 
 
@@ -97,7 +104,9 @@ def make_reporter(agents: List[str], verbose: bool = True, as_json: bool = False
                 ui.agent_tag(event["agent"], agents),
                 ui.verdict_tag(event.get("verdict", "")),
                 ui.dim("state %s%s" % (str(event.get("digest", ""))[:8],
-                                       "" if event.get("gate_ok", True) else ", gate FAILING")),
+                                       "" if event.get("gate_ok", True)
+                                       else ", gate TIMED OUT" if event.get("gate_timed_out")
+                                       else ", gate FAILING")),
             ))
             if verbose and event.get("message"):
                 msg = event["message"].strip()
@@ -139,7 +148,14 @@ def make_reporter(agents: List[str], verbose: bool = True, as_json: bool = False
         elif kind == "gate_start":
             say("     " + ui.dim("running gate: %s" % event.get("command")))
         elif kind == "gate_done":
-            say("     " + (ui.green("gate passed") if event.get("ok") else ui.red("gate failed (exit %s)" % event.get("exit_code"))))
+            if event.get("ok"):
+                say("     " + ui.green("gate passed"))
+            elif event.get("timed_out"):
+                say("     " + ui.yellow("the gate ran out of time after %s; this is not a test failure"
+                                        % human_duration(event.get("timeout")))
+                    + ui.dim(" (give it longer with --gate-timeout MINUTES)"))
+            else:
+                say("     " + ui.red("gate failed (exit %s)" % event.get("exit_code")))
         elif kind == "workflow_proven":
             say("  " + ui.green("✓ `%s` rule met: " % event.get("workflow")) + str(event.get("detail") or ""))
         elif kind == "workflow_veto":
@@ -230,17 +246,28 @@ def turn_timeout_seconds(args: argparse.Namespace) -> Optional[int]:
     a turn is tens of minutes — and seconds everywhere inside, because that is
     what subprocess timeouts take.
     """
-    minutes = getattr(args, "turn_timeout", None)
+    return _minutes_flag(args, "turn_timeout", "a turn", DEFAULT_TURN_TIMEOUT)
+
+
+def gate_timeout_seconds(args: argparse.Namespace) -> Optional[int]:
+    """`--gate-timeout MINUTES` as seconds, or None when it was not given."""
+    return _minutes_flag(args, "gate_timeout", "the gate", DEFAULT_GATE_TIMEOUT)
+
+
+def _minutes_flag(args: argparse.Namespace, name: str, what: str,
+                  default: int) -> Optional[int]:
+    flag = "--" + name.replace("_", "-")
+    minutes = getattr(args, name, None)
     if minutes is None:
         return None
     try:
         minutes = int(minutes)
     except (TypeError, ValueError):
-        raise SystemExit("--turn-timeout takes a number of minutes")
+        raise SystemExit("%s takes a number of minutes" % flag)
     if minutes < 1:
         raise SystemExit(
-            "--turn-timeout %s: a turn needs at least a minute. Leave it out for "
-            "the default of %s." % (minutes, human_duration(DEFAULT_TURN_TIMEOUT))
+            "%s %s: %s needs at least a minute. Leave it out for "
+            "the default of %s." % (flag, minutes, what, human_duration(default))
         )
     return minutes * 60
 
@@ -284,6 +311,9 @@ def build_config(args: argparse.Namespace) -> Config:
     turn_timeout = turn_timeout_seconds(args)
     if turn_timeout is not None:
         cfg.turn_timeout = turn_timeout
+    gate_timeout = gate_timeout_seconds(args)
+    if gate_timeout is not None:
+        cfg.gate_timeout = gate_timeout
     if getattr(args, "max_debate", None) is not None:
         cfg.max_debate = args.max_debate
     if getattr(args, "start", ""):
@@ -1510,9 +1540,15 @@ def cmd_status(args: argparse.Namespace) -> int:
     if open_ids:
         print("  arguing about: " + ", ".join(open_ids[:6]))
 
-    gate_ok = next((t.get("gate_ok") for t in reversed(turns)), None)
-    if gate_ok is not None:
-        print("  gate:    " + (ui.green("passing") if gate_ok else ui.red("failing")))
+    last_gated = next((t for t in reversed(turns) if t.get("gate_ok") is not None), None)
+    if last_gated is not None:
+        if last_gated.get("gate_ok"):
+            shown = ui.green("passing")
+        elif last_gated.get("gate_timed_out"):
+            shown = ui.yellow("ran out of time — not a test failure (--gate-timeout MINUTES)")
+        else:
+            shown = ui.red("failing")
+        print("  gate:    " + shown)
     if running:
         print()
         print(ui.dim("  follow it live: ") + ui.bold("duet report --transcript"))
@@ -1626,9 +1662,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
     result = data.get("result") or {}
     gate_cmd = args.gate if getattr(args, "gate", None) is not None else (cfg_data.get("gate") or "")
     try:
-        timeout = int(cfg_data.get("gate_timeout") or 900)
+        timeout = int(cfg_data.get("gate_timeout") or DEFAULT_GATE_TIMEOUT)
     except (TypeError, ValueError):
-        timeout = 900
+        timeout = DEFAULT_GATE_TIMEOUT
 
     ws = Workspace(root, gate=gate_cmd or None, gate_timeout=timeout)
     # Digest first, gate second: a gate is free to write files (coverage data,
@@ -1673,7 +1709,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
                               + ui.dim(" — re-run with --gate \"...\" to check one")))
         else:
             print("  %s %s  %s" % (ui.dim("gate:     "), gate.command,
-                                   ui.green("passed") if gate.ok else ui.red("FAILED (exit %d)" % gate.exit_code)))
+                                   ui.green("passed") if gate.ok
+                                   else ui.yellow(gate.headline()) if gate.timed_out
+                                   else ui.red(gate.headline())))
         print()
 
     if not signed:
@@ -1863,6 +1901,11 @@ def cmd_resume(args: argparse.Namespace) -> int:
     turn_timeout = turn_timeout_seconds(args)
     if turn_timeout is not None:
         cfg.turn_timeout = turn_timeout
+    # Same for the gate: a session that kept running out of gate time is the
+    # one most likely to be resumed, and it needs a way to raise the limit.
+    gate_timeout = gate_timeout_seconds(args)
+    if gate_timeout is not None:
+        cfg.gate_timeout = gate_timeout
 
     reason, fixes = _resume_blocker(data, path.name, cfg.max_rounds)
     if reason:
@@ -2236,7 +2279,8 @@ def cmd_review(args: argparse.Namespace) -> int:
         if not gate.skipped:
             print("  %s %s  %s" % (ui.dim("gate:     "), gate.command,
                                    ui.green("passed") if gate.ok
-                                   else ui.red("FAILED (exit %d)" % gate.exit_code)))
+                                   else ui.yellow(gate.headline()) if gate.timed_out
+                                   else ui.red(gate.headline())))
         if diff_truncated:
             print("  " + ui.yellow("the change is larger than %d chars and was cut short — "
                                    "the reviewer is told so, but it is not seeing all of it"
@@ -2307,10 +2351,16 @@ def cmd_review(args: argparse.Namespace) -> int:
             # gate line is printed before the review, and a long review buries
             # it; a reader who scrolls to "no findings" and stops would take a
             # red gate for a green one. So say it again where the verdict is.
-            print(ui.red("but the gate failed (exit %d): " % gate.exit_code)
-                  + ui.bold(gate.command)
-                  + ui.dim(" — that is a defect in this change whichever way the "
-                           "review went. Re-run it yourself."))
+            if gate.timed_out:
+                print(ui.yellow("but %s: " % gate.timeout_note())
+                      + ui.bold(gate.command)
+                      + ui.dim(" — nothing was shown to pass. Re-run it yourself, "
+                               "or give it longer with --gate-timeout MINUTES."))
+            else:
+                print(ui.red("but the gate failed (exit %d): " % gate.exit_code)
+                      + ui.bold(gate.command)
+                      + ui.dim(" — that is a defect in this change whichever way the "
+                               "review went. Re-run it yourself."))
         for note in out["notes"]:
             print(ui.yellow("note: ") + note)
 
@@ -2361,6 +2411,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="run without a gate — the two of them can then only agree by argument")
     p_run.add_argument("--rounds", type=int, help="maximum rounds (default 12)")
     p_run.add_argument("--turn-timeout", type=int, metavar="MINUTES", help=TURN_TIMEOUT_HELP)
+    p_run.add_argument("--gate-timeout", type=int, metavar="MINUTES", help=GATE_TIMEOUT_HELP)
     p_run.add_argument("--max-debate", type=int, help="rounds an issue may stay open before arbitration (default 3)")
     p_run.add_argument(
         "--pair",
@@ -2396,6 +2447,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="run without a gate — most of these refuse to")
         p.add_argument("--rounds", type=int, help="maximum rounds (default 12)")
         p.add_argument("--turn-timeout", type=int, metavar="MINUTES", help=TURN_TIMEOUT_HELP)
+        p.add_argument("--gate-timeout", type=int, metavar="MINUTES", help=GATE_TIMEOUT_HELP)
         p.add_argument("--max-debate", type=int,
                        help="rounds an issue may stay open before arbitration (default 3)")
         p.add_argument("--pair", metavar="A+B", help="which two agents, and who leads")
@@ -2546,6 +2598,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_resume.add_argument("--turn-timeout", type=int, metavar="MINUTES",
                           help=TURN_TIMEOUT_HELP + " Without it, the limit the dead "
                                "session was started with is kept.")
+    p_resume.add_argument("--gate-timeout", type=int, metavar="MINUTES",
+                          help=GATE_TIMEOUT_HELP + " Without it, the limit the dead "
+                               "session was started with is kept.")
     p_resume.add_argument("--rounds", type=int, metavar="N",
                           help="new total round budget, counting the rounds already used")
     p_resume.add_argument("--gate", metavar="CMD",
@@ -2579,6 +2634,7 @@ def build_parser() -> argparse.ArgumentParser:
                           help="do not run a gate before reviewing (it is otherwise found for you)")
     p_review.add_argument("--gate", metavar="CMD",
                           help="run this first and show the reviewer its output, e.g. \"pytest -q\"")
+    p_review.add_argument("--gate-timeout", type=int, metavar="MINUTES", help=GATE_TIMEOUT_HELP)
     p_review.set_defaults(func=cmd_review)
 
     p_jury = sub.add_parser(

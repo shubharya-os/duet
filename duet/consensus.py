@@ -259,8 +259,14 @@ class DebateState:
         return Decision(kind="continue")
 
     # -- reporting --------------------------------------------------------
-    def why_not_done(self, digest: str, gate_ok: bool) -> List[str]:
-        """Plain-language reasons the session is still open. Shown to agents."""
+    def why_not_done(self, digest: str, gate_ok: bool,
+                     gate_problem: str = "the acceptance gate is failing") -> List[str]:
+        """Plain-language reasons the session is still open. Shown to agents.
+
+        `gate_problem` is what to say when the gate is not green: a gate that
+        ran out of time is not "failing", and saying so sends both agents after
+        a test failure that does not exist.
+        """
         reasons: List[str] = []
         for agent in self.agents:
             verdict = self.last_verdict.get(agent)
@@ -278,7 +284,7 @@ class DebateState:
                 % (issue.severity, issue.raised_by, issue.title, issue.rounds_open)
             )
         if not gate_ok:
-            reasons.append("the acceptance gate is failing")
+            reasons.append(gate_problem)
         return reasons
 
     def to_dict(self) -> Dict[str, Any]:

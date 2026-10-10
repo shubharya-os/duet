@@ -8,11 +8,12 @@ when the rule could not possibly be checked.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 from duet import ui
 from duet.build import human_output
+from duet.config import DEFAULT_GATE_TIMEOUT
+from duet.workspace import GateResult, Workspace
 
 TASKS = {
 "fix": """\
@@ -126,13 +127,10 @@ USAGE = {
 }
 
 
-def gate_is_green(gate: str, root: str) -> bool:
-    try:
-        proc = subprocess.run(gate, cwd=root, shell=True, capture_output=True,
-                              text=True, timeout=900)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return proc.returncode == 0
+def gate_before(gate: str, root: str, timeout: int = DEFAULT_GATE_TIMEOUT) -> GateResult:
+    """The gate on the code as it is before any session — the same run, and the
+    same limit, a session's own gate gets."""
+    return Workspace(root, gate=gate, gate_timeout=timeout).run_gate()
 
 
 def run(args, name: str) -> int:
@@ -175,7 +173,19 @@ def run(args, name: str) -> int:
                   + (", or start from nothing with duet build" if name == "add" else ""))
             return 3
         args.gate = effective
-        if name == "refactor" and not gate_is_green(effective, root):
+        before = None
+        if name == "refactor":
+            before = gate_before(effective, root,
+                                 cli.gate_timeout_seconds(args)
+                                 or cli.load_config(root).gate_timeout)
+        if before is not None and before.timed_out:
+            print(ui.yellow("✗ ") + "before the refactor started, " + before.timeout_note() + ".")
+            print(ui.dim("  gate: ") + effective)
+            print(ui.dim("  A refactor is measured against a green suite, and this one did"))
+            print(ui.dim("  not finish, so nothing was shown to pass. Give it longer with ")
+                  + ui.bold("--gate-timeout MINUTES") + ui.dim("."))
+            return 3
+        if before is not None and not before.ok:
             print(ui.red("✗ ") + "the tests are failing before the refactor has started.")
             print(ui.dim("  gate: ") + effective)
             print(ui.dim("  A refactor has to show behaviour did not change, and the tests are"))

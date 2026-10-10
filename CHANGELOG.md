@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Fixed: a gate that ran out of time was reported as failing tests ("gate failed
+  (exit 124)", "gate FAILING"), so both agents went looking for a failure that did
+  not exist. It is now reported, to the user and in both prompts, as "the gate ran out
+  of time; this is not a test failure", and still does not count as green.
+  `--gate-timeout MINUTES` on every session command and on `duet resume`, saved with
+  the session.
+- Fixed: a command in an indented Markdown code block under "How to run it" was
+  invisible, so `duet jury`'s user juror could not try the product and `duet build`
+  showed no run line. Indented blocks now count; prose under the heading still does not.
 - Added: `duet jury` — a simulated panel of stakeholders (user, paying client, investor,
   demo-day judge, skeptic, plus any in `duet-jury.json`) that judges the product at the
   idea, plan, build or launch stage. Each juror is one read-only pass, alternating

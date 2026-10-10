@@ -15,6 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from duet.adapters.base import human_duration
+from duet.config import DEFAULT_GATE_TIMEOUT
+
 SKIP_DIRS = {
     ".git", ".duet", "__pycache__", "node_modules", ".venv", "venv",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis", ".tox",
@@ -34,11 +37,35 @@ class GateResult:
     exit_code: int
     output: str
     skipped: bool = False
+    # Killed by its time limit rather than finished. Not green — nothing was
+    # shown to pass — but not a test failure either, and calling it "FAILED"
+    # sends both agents hunting for a broken test that does not exist.
+    timed_out: bool = False
+    timeout: int = 0
+
+    def headline(self) -> str:
+        """"PASSED", "FAILED (exit 1)", or that the gate never finished."""
+        if self.ok:
+            return "PASSED"
+        if self.timed_out:
+            return "TIMED OUT — " + self.timeout_note()
+        return "FAILED (exit %d)" % self.exit_code
+
+    def timeout_note(self) -> str:
+        return ("the gate ran out of time after %s; this is not a test failure"
+                % human_duration(self.timeout))
+
+    def problem(self) -> str:
+        """Why this gate does not count as green, in the agents' words."""
+        if self.timed_out:
+            return (self.timeout_note() + ", but it does not count as green until "
+                    "it finishes (the limit is set with --gate-timeout MINUTES)")
+        return "the acceptance gate is failing"
 
     def render(self, limit: int = 3000) -> str:
         if self.skipped:
             return "No acceptance gate configured."
-        head = "PASSED" if self.ok else "FAILED (exit %d)" % self.exit_code
+        head = self.headline()
         out = self.output.strip()
         if len(out) > limit:
             out = out[: limit // 2] + "\n...[trimmed]...\n" + out[-limit // 2 :]
@@ -46,7 +73,8 @@ class GateResult:
 
 
 class Workspace:
-    def __init__(self, root: str, gate: Optional[str] = None, gate_timeout: int = 900):
+    def __init__(self, root: str, gate: Optional[str] = None,
+                 gate_timeout: int = DEFAULT_GATE_TIMEOUT):
         self.root = Path(root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.gate = gate
@@ -351,12 +379,20 @@ class Workspace:
                 timeout=self.gate_timeout,
                 env={**os.environ, "DUET_GATE": "1"},
             )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
+            # Keep what it printed before it was stopped: how far the run got
+            # is the first thing anyone deciding on a longer limit wants to see.
+            partial = "".join(
+                part.decode("utf-8", "replace") if isinstance(part, bytes) else part
+                for part in (exc.stdout, exc.stderr) if part
+            )
             return GateResult(
                 command=self.gate,
                 ok=False,
                 exit_code=124,
-                output="gate timed out after %ds" % self.gate_timeout,
+                output=partial,
+                timed_out=True,
+                timeout=self.gate_timeout,
             )
         except OSError as exc:
             return GateResult(command=self.gate, ok=False, exit_code=127, output=str(exc))

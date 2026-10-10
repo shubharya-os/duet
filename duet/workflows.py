@@ -28,6 +28,9 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from duet.adapters.base import human_duration
+from duet.config import DEFAULT_GATE_TIMEOUT
+
 from duet.page import PAGE_RULES
 from duet.workspace import SKIP_DIRS as WORKSPACE_SKIP_DIRS
 
@@ -302,8 +305,17 @@ def replay_fails(root: str, state: Dict) -> Optional[bool]:
             for name in DEPENDENCY_DIRS:
                 if (base / name).is_dir() and not (work / name).exists():
                     (work / name).symlink_to(base / name)
+            limit = int(state.get("gate_timeout") or DEFAULT_GATE_TIMEOUT)
             proc = subprocess.run(gate, cwd=str(work), shell=True,
-                                  capture_output=True, text=True, timeout=900)
+                                  capture_output=True, text=True, timeout=limit)
+    except subprocess.TimeoutExpired:
+        # Not a pass and not a fail: it says nothing about whether the tests
+        # catch the bug, and "no replay was possible" without this would leave
+        # the reader guessing why.
+        state["replay_note"] = (
+            "the replay ran out of time after %s, which is not a test result — "
+            "give it longer with --gate-timeout MINUTES" % human_duration(limit))
+        return None
     except (OSError, subprocess.SubprocessError, shutil.Error):
         return None
     failed = proc.returncode != 0

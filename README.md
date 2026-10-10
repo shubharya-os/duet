@@ -705,7 +705,7 @@ duet sessions        # every session in this workspace
 ```
 
 Useful flags for `run`: `--gate` (your tests — the most valuable one), `--pair`,
-`--rounds`, `--turn-timeout MINUTES`, `--accept "what done means"`, `--swap N` to
+`--rounds`, `--turn-timeout MINUTES`, `--gate-timeout MINUTES`, `--accept "what done means"`, `--swap N` to
 trade places, `--commit`, `--json`.
 
 ### The clock, and the network
@@ -715,6 +715,12 @@ session command and on `duet resume`, and it is saved with the session, so a
 resumed one keeps it. Both agents are told the budget in their prompt, with the
 instruction to leave the workspace consistent and hand over before it runs out —
 a lead that does not know it is on a clock tries to do everything in one turn.
+
+The gate has a clock too: 15 minutes by default, `--gate-timeout MINUTES` to change
+it, saved with the session like the turn limit. A gate that runs out of time is
+reported as exactly that — "the gate ran out of time; this is not a test failure",
+to you and to both agents — so nobody goes looking for a failing test that does not
+exist. It still is not a pass: a session cannot end on a gate that never finished.
 
 If a turn is cut off after it has changed the workspace, that is progress and not
 a failure: the peer takes the next turn on the files it left, and is told the
@@ -777,7 +783,7 @@ pipe.
 Four of those were found by pointing duet's own ChatGPT side at duet's core and asking
 for correctness bugs. All four were real. That's the premise working on its author.
 
-675 tests, no network or credentials needed. CI on Python 3.9, 3.11 and 3.13.
+701 tests, no network or credentials needed. CI on Python 3.9, 3.11 and 3.13.
 
 ```bash
 pytest -q
