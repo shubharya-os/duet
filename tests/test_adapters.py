@@ -770,9 +770,14 @@ def test_duet_login_does_not_answer_a_quota_problem_with_a_browser(tmp_path, mon
 
 
 def test_duet_login_force_does_not_call_a_quota_problem_a_failed_sign_in(tmp_path, monkeypatch, capsys):
-    """--force runs the sign-in anyway. The probe afterwards still fails on
-    quota, and the old wording then announced "still not signed in" about a
-    sign-in that had just succeeded."""
+    """--force runs the sign-in anyway. When that sign-in is abandoned the
+    account is still the one that hit the limit, so the probe afterwards still
+    fails on quota — and the old wording then announced "still not signed in"
+    about an account that is signed in.
+
+    (This test used to run a sign-in that *succeeded* and expect the quota
+    note to survive it. That expectation was the relogin bug: see
+    test_a_successful_codex_sign_in_forgets_the_old_accounts_usage_limit.)"""
     import argparse
     from duet import cli
     from duet.adapters import codex_cli
@@ -780,7 +785,7 @@ def test_duet_login_force_does_not_call_a_quota_problem_a_failed_sign_in(tmp_pat
     binary = fake_bin(tmp_path, "codex", 'echo "Logged in using ChatGPT"')
     monkeypatch.setattr("duet.adapters.codex_cli.Adapter.which", staticmethod(lambda *a: binary))
     codex_cli.record_usage_limit(USAGE_LIMIT.replace("Oct 18th, 2026", "Oct 18th, 2099"))
-    monkeypatch.setattr(cli.subprocess, "call", lambda *a, **k: 0)
+    monkeypatch.setattr(cli.subprocess, "call", lambda *a, **k: 1)   # cancelled
     monkeypatch.setattr(cli, "cmd_doctor", lambda args: 1)
 
     args = argparse.Namespace(root=str(tmp_path), agent="chatgpt", force=True)
@@ -788,6 +793,175 @@ def test_duet_login_force_does_not_call_a_quota_problem_a_failed_sign_in(tmp_pat
     out = capsys.readouterr().out
     assert "still not signed in" not in out        # because it is signed in
     assert "out of Codex usage quota" in out       # this is the real problem
+    assert note_file().exists()                    # a cancelled sign-in forgets nothing
+
+
+def test_a_successful_codex_sign_in_forgets_the_old_accounts_usage_limit(tmp_path, monkeypatch, capsys):
+    """2026-10-10: one ChatGPT account hit its Codex limit, the user ran
+    `duet login --force` and signed in with a different account — and duet
+    went on calling the new account out of quota until the old one's reset,
+    because only a successful turn ever cleared the note. duet cannot tell
+    whether the new sign-in is the same account, so a sign-in that worked has
+    to forget what the old one said."""
+    import argparse
+    from duet import cli
+    from duet.adapters import codex_cli
+
+    binary = fake_bin(tmp_path, "codex", 'echo "Logged in using ChatGPT"')
+    monkeypatch.setattr("duet.adapters.codex_cli.Adapter.which", staticmethod(lambda *a: binary))
+    codex_cli.record_usage_limit(USAGE_LIMIT.replace("Oct 18th, 2026", "Oct 18th, 2099"))
+    assert not CodexCliAdapter.probe().ok
+    ran = []
+    monkeypatch.setattr(cli.subprocess, "call", lambda argv, **k: ran.append(argv) or 0)
+    monkeypatch.setattr(cli, "cmd_doctor", lambda args: 0)
+
+    args = argparse.Namespace(root=str(tmp_path), agent="chatgpt", force=True)
+    assert cli.cmd_login(args) == 0
+    assert ran and ran[0][-1] == "login"           # the sign-in really ran
+    out = capsys.readouterr().out
+    assert "out of Codex usage quota" not in out
+    assert not note_file().exists()
+    probe = CodexCliAdapter.probe()
+    assert probe.ok and probe.signed_in is True
+
+
+def test_a_codex_login_that_exits_0_but_leaves_it_signed_out_forgets_nothing(tmp_path, monkeypatch):
+    """"Worked" means exit 0 *and* signed in afterwards, not exit 0 alone."""
+    import argparse
+    from duet import cli
+    from duet.adapters import codex_cli
+
+    binary = fake_bin(tmp_path, "codex", 'echo "Not logged in"; exit 1')
+    monkeypatch.setattr("duet.adapters.codex_cli.Adapter.which", staticmethod(lambda *a: binary))
+    codex_cli.record_usage_limit(USAGE_LIMIT.replace("Oct 18th, 2026", "Oct 18th, 2099"))
+    monkeypatch.setattr(cli.subprocess, "call", lambda *a, **k: 0)
+    monkeypatch.setattr(cli, "cmd_doctor", lambda args: 1)
+
+    args = argparse.Namespace(root=str(tmp_path), agent="chatgpt", force=True)
+    assert cli.cmd_login(args) == 1
+    assert note_file().exists()
+
+
+# -- a sign-in check that runs out of time ----------------------------------
+def _slow_then(module, monkeypatch, answers):
+    """Make `module`'s status command time out, or answer, in the given order."""
+    import subprocess
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(kw.get("timeout"))
+        answer = answers[min(len(calls), len(answers)) - 1]
+        if answer is None:
+            raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+        return subprocess.CompletedProcess(argv, 0, answer, "")
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    return calls
+
+
+def test_a_slow_claude_sign_in_check_is_retried_with_more_time(tmp_path, monkeypatch):
+    """2026-10-10, load average ~200: `claude auth status` took longer than
+    45 seconds for a signed-in account and duet refused to start."""
+    from duet.adapters import claude_code
+
+    calls = _slow_then(claude_code, monkeypatch, [None, '{"loggedIn": true, "authMethod": "claudeai"}'])
+    assert claude_code.read_auth_status(["claude"]) == (True, "signed in (claudeai)")
+    assert len(calls) == 2 and calls[1] > calls[0]
+
+
+def test_a_claude_sign_in_check_that_never_answers_starts_with_a_warning(tmp_path, monkeypatch, capsys):
+    from duet import cli
+    from duet.adapters import claude_code
+    from duet.config import AgentSpec, Config
+
+    binary = fake_bin(tmp_path, "claude", "exit 0")
+    monkeypatch.setattr("duet.adapters.claude_code.Adapter.which", staticmethod(lambda *a: binary))
+    _slow_then(claude_code, monkeypatch, [None])
+
+    probe = ClaudeCodeAdapter.probe()
+    assert probe.ok                                  # unknown is not signed out
+    assert probe.signed_in is not False
+    for text in (probe.detail, probe.fix, probe.warning):
+        assert "auth login" not in text              # no login advice for a timeout
+    assert "timed out" in probe.warning and "first turn" in probe.warning
+
+    cfg = Config(agents=[AgentSpec(name="claude-opus", backend="claude-code")])
+    assert cli.preflight(cfg) == []                  # the session starts...
+    err = capsys.readouterr().err
+    assert "claude-opus" in err and "timed out" in err   # ...and says why it is unsure
+    assert "auth login" not in err
+
+
+def test_a_definite_claude_sign_out_still_refuses(tmp_path, monkeypatch):
+    from duet import cli
+    from duet.config import AgentSpec, Config
+
+    binary = fake_bin(tmp_path, "claude", """echo '{"loggedIn": false, "authMethod": "none"}'""")
+    monkeypatch.setattr("duet.adapters.claude_code.Adapter.which", staticmethod(lambda *a: binary))
+    cfg = Config(agents=[AgentSpec(name="claude-opus", backend="claude-code")])
+    problems = cli.preflight(cfg)
+    assert len(problems) == 1 and "claude auth login" in problems[0]
+
+
+def test_a_codex_sign_in_check_that_never_answers_is_not_a_sign_out(tmp_path, monkeypatch):
+    """The same mistake in the Codex probe: a timeout advised `codex login`."""
+    from duet.adapters import codex_cli
+
+    binary = fake_bin(tmp_path, "codex", "exit 0")
+    monkeypatch.setattr("duet.adapters.codex_cli.Adapter.which", staticmethod(lambda *a: binary))
+    calls = _slow_then(codex_cli, monkeypatch, [None])
+
+    probe = CodexCliAdapter.probe()
+    assert len(calls) == 2                           # retried once, then gave up
+    assert probe.ok and probe.signed_in is None
+    assert probe.fix == ""                           # no login advice for a timeout
+    assert codex_cli.LOGIN_HINT not in probe.detail + probe.warning
+    assert "timed out" in probe.warning
+
+
+def test_a_timed_out_codex_check_does_not_refuse_on_an_old_quota_note(tmp_path, monkeypatch):
+    """A dated usage-limit note from a previous sign-in is not proof of the
+    *current* sign-in state. If `codex login status` only timed out, saying
+    "signed in, but out of quota" states a sign-in duet never confirmed, and
+    refusing on it is the exact mistake this bug is about — just dressed up
+    as a quota message instead of a login hint."""
+    from duet.adapters import codex_cli
+    from duet.config import AgentSpec, Config
+    from duet import cli
+
+    binary = fake_bin(tmp_path, "codex", "exit 0")
+    monkeypatch.setattr("duet.adapters.codex_cli.Adapter.which", staticmethod(lambda *a: binary))
+    codex_cli.record_usage_limit(USAGE_LIMIT.replace("Oct 18th, 2026", "Oct 18th, 2099"))
+    _slow_then(codex_cli, monkeypatch, [None])
+
+    probe = CodexCliAdapter.probe()
+    assert probe.ok                                  # unknown is not out of quota either
+    assert probe.signed_in is None
+    assert probe.fix == ""
+    assert "timed out" in probe.warning
+
+    cfg = Config(agents=[AgentSpec(name="chatgpt", backend="codex-cli")])
+    assert cli.preflight(cfg) == []                  # starts, with a warning — not refused
+
+
+def test_duet_login_does_not_open_a_browser_because_a_check_was_slow(tmp_path, monkeypatch, capsys):
+    import argparse
+    from duet import cli
+    from duet.adapters import codex_cli
+
+    binary = fake_bin(tmp_path, "codex", "exit 0")
+    monkeypatch.setattr("duet.adapters.codex_cli.Adapter.which", staticmethod(lambda *a: binary))
+    _slow_then(codex_cli, monkeypatch, [None])
+
+    def refuse(*a, **k):
+        raise AssertionError("duet login opened a sign-in because a status check was slow")
+
+    monkeypatch.setattr(cli.subprocess, "call", refuse)
+    monkeypatch.setattr(cli, "cmd_doctor", lambda args: 0)
+    args = argparse.Namespace(root=str(tmp_path), agent="chatgpt", force=False)
+    cli.cmd_login(args)
+    out = capsys.readouterr().out
+    assert "already signed in" not in out and "timed out" in out
 
 
 def test_a_usage_limit_wins_over_an_earlier_unrelated_error(tmp_path):

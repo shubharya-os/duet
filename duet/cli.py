@@ -383,6 +383,11 @@ def preflight(cfg: Config) -> List[str]:
             if probe.fix:
                 line += "\n    fix: " + probe.fix
             problems.append(line)
+        elif probe.warning:
+            # Not a problem, so the session starts — but say why nothing was
+            # confirmed. stderr, so a --json stdout stays parseable.
+            print(ui.yellow("! ") + "agent %s (%s): %s" % (spec.name, spec.backend, probe.warning),
+                  file=sys.stderr)
     return problems
 
 
@@ -451,7 +456,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             ok = False
             continue
         probe = cls.probe(spec.options)
-        if probe.ok:
+        if probe.ok and probe.warning:
+            print("  " + ui.yellow("! ") + probe.detail)
+            print("    " + ui.yellow("note: ") + probe.warning)
+        elif probe.ok:
             print("  " + ui.green("✓ ") + probe.detail)
         else:
             ok = False
@@ -592,6 +600,12 @@ def cmd_login(args: argparse.Namespace) -> int:
         # usage allowance fails the probe, and running `codex login` at it opens
         # a browser for nothing and then reports "still not signed in", which is
         # false. doctor at the end of this command reports the real problem.
+        if probe.warning and not args.force:
+            # The check ran out of time. That is not a reason to open a browser,
+            # and not a reason to claim it is signed in either.
+            print(ui.yellow("! ") + "%s: %s" % (name, probe.warning))
+            print(ui.dim("    to sign in anyway: duet login --force"))
+            continue
         if (probe.signed_in or probe.ok) and not args.force:
             print(ui.green("✓ ") + "%s is already signed in — %s" % (name, probe.detail))
             continue
@@ -616,6 +630,7 @@ def cmd_login(args: argparse.Namespace) -> int:
             print(ui.red("  could not run it: %s" % exc))
             failures += 1
             continue
+        cls.after_login(agent.launch, code)
         after = cls.probe()
         if after.ok:
             print(ui.green("✓ ") + "%s signed in — %s" % (name, after.detail))
