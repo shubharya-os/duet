@@ -7,7 +7,7 @@ evidence and is labelled as such.
 
 ## Automated suite
 
-701 tests, no network and no credentials required. `pytest -q` from a clean clone.
+709 tests, no network and no credentials required. `pytest -q` from a clean clone.
 Counts in this file are as-of their section; this header tracks the current suite.
 
 | area | what is pinned |

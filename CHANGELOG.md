@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.8.0
 
+- Fixed: signing Codex in again with a different ChatGPT account still reported the
+  old account's "out of usage quota until …" for another week. A successful
+  `codex login` run by duet now forgets the recorded limit; a failed or cancelled one
+  leaves it alone.
+- Fixed: on a heavily loaded machine, a sign-in check that merely ran out of time
+  refused to start the session and told a signed-in user to log in. The check is
+  retried with three times the time, and if it still cannot answer the session starts
+  with a warning; a definite "not signed in" still refuses.
 - Fixed: a gate that ran out of time was reported as failing tests ("gate failed
   (exit 124)", "gate FAILING"), so both agents went looking for a failure that did
   not exist. It is now reported, to the user and in both prompts, as "the gate ran out
