@@ -58,6 +58,15 @@ local images. duet detects it by itself for a project with an `index.html` and n
 command. `{{DUET}} page shot index.html` writes one full-page PNG per width; open them
 rather than reading the CSS and imagining it.
 
+**Market fit, not only passing tests.** `{{DUET}} jury` sits a simulated panel — a user
+who actually runs the product in a throwaway copy, a paying client, an investor, a
+demo-day judge and a skeptic — and checks that every objection quotes something really
+in the workspace or the walkthrough; unverified ones do not count. Exit 1 means a
+verified blocker. Add `--jury` to `build`, `plan`, `add` or `run` and the panel sits when
+both agents sign off, its verified blockers reopening the session as issues (at most
+twice). Tell the user plainly it is models playing stakeholders: it finds gaps, it is
+not market evidence.
+
 `fix`, `add` and `refactor` need the project's test command; if duet cannot find one,
 it says so and stops, and you should pass `--gate`. Tell the user which rule the
 session was held to when you report back — "both agreed, and the tests were replayed

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Added: `duet jury` — a simulated panel of stakeholders (user, paying client, investor,
+  demo-day judge, skeptic, plus any in `duet-jury.json`) that judges the product at the
+  idea, plan, build or launch stage. Each juror is one read-only pass, alternating
+  between the pair's two backends. The user juror tries the product: the README's run
+  command runs in a throwaway copy of the workspace with a time limit, or a website is
+  rendered and screenshotted. Every objection must quote a workspace file or the
+  walkthrough output, and the quote is checked; one that is not really there is shown
+  as unverified and does not count. Writes `JURY.md`; exits 0 with no verified blocker,
+  1 with one, 3 when it cannot sit. `--jury` on `run`, `build`, `plan` and `add` sits
+  the panel when both agents sign off, turns its verified blockers into open issues
+  raised by `jury:<persona>` (checked, once claimed fixed, by the claimant's peer), and
+  sits at most twice per session. Every report says it is a simulated panel, not market
+  evidence.
 - Fixed: `duet page shot` got the size wrong on the pages it matters most on. A page
   with a fixed 900px panel, shot at `--width 375`, came out 375x1984 and nine parts
   blank under a document 147px tall — and the 542px of panel running off the right

@@ -76,6 +76,9 @@ class DebateState:
         self.arbitration_retry_at: Dict[str, int] = {}
         self.stall_rounds = 0
         self.last_digest: Optional[str] = None
+        # Who claimed each fix. Only needed for an issue no agent raised — a
+        # jury objection — whose fix is checked by the claimant's peer.
+        self.claimed_by: Dict[str, str] = {}
 
     # -- reading ----------------------------------------------------------
     def open_issues(self) -> List[Issue]:
@@ -87,6 +90,19 @@ class DebateState:
     def issues_against(self, agent: str) -> List[Issue]:
         """Open issues raised by the other side, i.e. this agent's homework."""
         return [i for i in self.open_issues() if i.raised_by != agent]
+
+    def verifier_of(self, issue: Issue) -> str:
+        """Who may verify a claimed fix: whoever raised the issue.
+
+        An issue raised by `jury:<persona>` was raised by nobody who takes
+        turns, so the jury cannot drop it — the peer of the agent who claimed
+        the fix checks it on the jury's behalf. Otherwise a jury blocker, once
+        claimed, would wait on a verifier who never speaks again.
+        """
+        if issue.raised_by in self.agents:
+            return issue.raised_by
+        claimant = self.claimed_by.get(issue.id, "")
+        return self.peer_of(claimant) if claimant else issue.raised_by
 
     def peer_of(self, agent: str) -> str:
         for other in self.agents:
@@ -107,7 +123,7 @@ class DebateState:
         # promises never to do.
         re_raised = {i.id for i in env.issues}
         for issue in (self.issues.values() if env.parse_ok else []):
-            if issue.raised_by != agent or issue.status != "claimed_fixed":
+            if issue.status != "claimed_fixed" or self.verifier_of(issue) != agent:
                 continue
             if issue.id in re_raised:
                 issue.status = "open"
@@ -152,10 +168,11 @@ class DebateState:
                 report.withdrawn.append(issue_id)
             else:
                 issue.status = "claimed_fixed"
+                self.claimed_by[issue_id] = agent
                 issue.resolution = "claimed fixed by %s in round %d; awaiting %s" % (
                     agent,
                     env.round,
-                    issue.raised_by,
+                    self.verifier_of(issue),
                 )
                 report.claimed.append(issue_id)
 
@@ -275,6 +292,7 @@ class DebateState:
             arbitration_retry_at=dict(self.arbitration_retry_at),
             stall_rounds=self.stall_rounds,
             last_digest=self.last_digest,
+            claimed_by=dict(self.claimed_by),
         )
 
     @classmethod
@@ -302,4 +320,6 @@ class DebateState:
         state.arbitration_retry_at = dict(data.get("arbitration_retry_at", {}))
         state.stall_rounds = int(data.get("stall_rounds", 0))
         state.last_digest = data.get("last_digest")
+        claimed = data.get("claimed_by")
+        state.claimed_by = {str(k): str(v) for k, v in claimed.items()} if isinstance(claimed, dict) else {}
         return state

@@ -152,6 +152,13 @@ class Config:
     # was reproduced in round 2, survives a crash and a `duet resume`.
     workflow: str = ""
     workflow_state: Dict[str, Any] = field(default_factory=dict)
+    # `--jury`: a simulated stakeholder panel sits when both agents sign off,
+    # at most `jury_max` times. How often it has sat is saved here, with the
+    # rest of the config, so a resumed session cannot reset the cap.
+    jury: bool = False
+    jury_panel: str = ""
+    jury_max: int = 2
+    jury_convened: int = 0
 
     @property
     def agent_names(self) -> List[str]:

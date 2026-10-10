@@ -255,6 +255,73 @@ blocking: this change should not ship as it is.
 That is a real finding from a real run — exit 1, because something blocking was raised.
 Use it before you push.
 
+### Market fit: `duet jury`
+
+Tests say whether it works. They do not say whether anyone would use it, pay for it,
+back it, or pick it over what they already have. `duet jury` puts that to a panel of
+simulated stakeholders, each one a single read-only pass by an agent — held read-only
+by the backend, the same way `duet review` is — alternating between your pair's two
+models so the panel is not one model's opinion:
+
+| juror | cares about | the one decision |
+|---|---|---|
+| `user` | does it work on the first try, does it beat what they use today | would you use it? |
+| `client` | trust, onboarding, what is missing before buying | would you pay, and how much? |
+| `investor` | who has the problem, how many, why now, alternatives, defensibility, model | would you invest? |
+| `judge` | originality, execution, impact, clarity — each scored 1–10 | win or no win? |
+| `skeptic` | the existing alternatives, and why people stay with them | would people switch? |
+
+The `user` does not read about the product, it tries it: the command under the README's
+"How to run it" runs in a throwaway copy of the workspace with a one-minute limit, and
+what it printed is what the user juror judges. For a website it is rendered the way
+`duet page check` and `duet page shot` do, and the user is shown the screenshots.
+
+Every objection has to carry evidence — a quote from a workspace file with its path, or
+from the walkthrough output — and **duet checks every quote** (whitespace aside). One
+that is not really there is shown as `UNVERIFIED` and does not count.
+
+```
+duet jury                                  # stage read off the workspace
+duet jury --stage idea --idea "a ledger for shared households"
+duet jury --stage launch --panel user,client --rounds-of-questions 1
+```
+
+The stage defaults to `idea` for an empty workspace with `--idea`, `plan` when PLAN.md
+exists beside little code, and `build` otherwise; `launch` also shows the panel the
+README, any landing page and anything about pricing. `--rounds-of-questions N` gives
+each juror N more passes in which it sees what the others found and may revise.
+
+The report is `JURY.md` (in `.duet/jury/<time>/`, or `--out`): each juror's decision,
+score and objections, the walkthrough transcript, and a summary — who would use it, who
+would pay, who would invest, the judges' score, and the three objections most worth
+fixing. Exit 0 when no verified blocker remains, 1 when one does, 3 when the panel
+cannot sit (a bad `duet-jury.json`, an unknown juror, no juror answering).
+
+Add your own jurors in `duet-jury.json` at the project root. Unknown keys are an error,
+not ignored:
+
+```json
+{
+  "personas": [
+    {"name": "ops-lead", "role": "runs a small warehouse team",
+     "cares_about": "setup time and who supports it", "decision": "Would you roll this out?"}
+  ],
+  "max_convenings": 2
+}
+```
+
+**In a session:** `--jury` (and `--panel`) on `duet run`, `build`, `plan` and `add`.
+When both agents sign off, the panel sits before the session may end. Each verified
+blocker becomes an open issue raised by `jury:<persona>`, and the session carries on:
+the pair fixes it — the fix is checked by the peer of whoever claims it, on the jury's
+behalf — or argues it down like any other issue. The panel sits at most twice per
+session (`max_convenings`), so it cannot keep one open forever; its last `JURY.md` is in
+the session directory and the session report says what it decided.
+
+It is a simulated panel — models playing stakeholders. It finds gaps worth closing. It is
+not market evidence, and it does not replace putting the thing in front of real people;
+every report says so.
+
 ### `duet build` — start from nothing, with a gate from round one
 
 An empty directory is where duet's own mechanism used to lapse: there are no tests, so
@@ -623,6 +690,7 @@ duet refactor "..."  # existing tests may not be edited; refused on a red suite
 duet plan "goal"     # argue out PLAN.md; no code may change
 duet page check ...  # the gate a website can have: render it, print every fault
 duet page shot ...   # one full-page PNG per width, so both agents can look
+duet jury            # a simulated stakeholder panel; every objection checked
 duet resume          # carry on a session that died, keeping the argument
 duet status          # what is the session doing right now (works mid-run)
 duet verify          # does the last sign-off still hold? re-runs the gate
@@ -709,7 +777,7 @@ pipe.
 Four of those were found by pointing duet's own ChatGPT side at duet's core and asking
 for correctness bugs. All four were real. That's the premise working on its author.
 
-633 tests, no network or credentials needed. CI on Python 3.9, 3.11 and 3.13.
+675 tests, no network or credentials needed. CI on Python 3.9, 3.11 and 3.13.
 
 ```bash
 pytest -q

@@ -316,6 +316,23 @@ If it holds up, vote DONE and the session ends. If it does not, raise the issue
 with the fix and vote CONTINUE — that is not a failure, it is the job.
 """
 
+JURY_DIRECTIVE = """\
+THE JURY HAS SAT, AND YOUR SIGN-OFFS DO NOT COUNT YET
+
+You both signed off, so a simulated stakeholder panel judged the product. These
+objections of theirs were verified against the workspace — the quote each one
+cites is really there — and they are now open blocker issues, raised by
+`jury:<persona>`:
+
+{issues}
+
+The full report is at {report}. Treat each like any other issue: fix it and list
+its id in `resolves` (your peer then checks the fix on the jury's behalf), or
+argue it down with a reason. It is a simulated panel — it finds gaps, it is not
+market evidence — so do not chase taste, but do not wave a real gap away either.
+
+"""
+
 REFUSED_WRITES_DIRECTIVE = """\
 BEFORE YOUR PEER SEES THIS — the harness saw these calls from your last reply
 refused by the permission mode, so they did not happen:

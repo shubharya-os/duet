@@ -23,6 +23,7 @@ from duet import build as build_cmd
 from duet import page as page_check
 from duet import workflow_commands
 from duet import from_ecc
+from duet import jury
 from duet.config import (
     BACKEND_ALIASES,
     DEFAULT_PAIR,
@@ -157,6 +158,18 @@ def make_reporter(agents: List[str], verbose: bool = True, as_json: bool = False
             say("\n" + ui.bold(ui.yellow("ARBITRATION")) + " on %s — %s" % (event.get("issue"), event.get("title")))
         elif kind == "arbitration_done":
             say("  " + ui.yellow("ruling by %s: %s" % (event.get("decider"), str(event.get("ruling"))[:200])))
+        elif kind == "jury_start":
+            say("\n" + ui.bold(ui.yellow("JURY")) + " sits (%s of %s): %s"
+                % (event.get("convening"), event.get("of"), ", ".join(event.get("panel") or [])))
+        elif kind == "jury_done":
+            opened = event.get("opened") or []
+            say("  " + ui.yellow(str(event.get("summary"))))
+            if opened:
+                say("  " + ui.red("reopened with: %s" % ", ".join(opened)))
+            if event.get("report"):
+                say("  " + ui.dim("jury: " + str(event["report"])))
+        elif kind == "jury_failed":
+            say("  " + ui.red("the jury could not sit: %s" % event.get("reason")))
         elif kind == "commit":
             say("  " + (ui.green("committed") if event.get("ok") else ui.dim("commit skipped: " + str(event.get("output"))[:120])))
         elif kind == "session_end":
@@ -287,6 +300,9 @@ def build_config(args: argparse.Namespace) -> Config:
         cfg.allow_run = args.allow_run
     if getattr(args, "quick", False):
         cfg.workflow_state["quick"] = True
+    if getattr(args, "jury", False):
+        cfg.jury = True
+        cfg.jury_panel = getattr(args, "panel", "") or ""
     if getattr(args, "accept", None):
         cfg.acceptance = args.accept
     if getattr(args, "accept_file", None):
@@ -328,6 +344,21 @@ def cmd_run(args: argparse.Namespace) -> int:
     cfg = build_config(args)
     cfg.task = task
     cfg.context = read_context(args)
+
+    if getattr(args, "panel", None) and not cfg.jury:
+        print(ui.red("✗ ") + "--panel chooses who sits on the jury, and there is no jury "
+              "without --jury.")
+        return 3
+    if cfg.jury:
+        # Checked before a single turn is spent: a typo in duet-jury.json found
+        # only when the pair first signs off has cost the whole session.
+        try:
+            jury_config = jury.load_config(cfg.root)
+            jury.choose_panel(jury_config, cfg.jury_panel)
+        except jury.JuryError as exc:
+            print(ui.red("✗ ") + "the jury cannot sit: %s" % exc)
+            return 3
+        cfg.jury_max = jury_config.max_convenings
 
     if cfg.gate:
         unusable = gate_detect.why_unusable(cfg.gate, cfg.root)
@@ -2375,8 +2406,18 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--allow-nested", action="store_true",
                        help="permit starting this from inside another duet session")
 
+    def jury_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--jury", action="store_true",
+                       help="when both sign off, a simulated stakeholder panel sits before "
+                            "the session may end; its verified blockers become open issues")
+        p.add_argument("--panel", metavar="NAMES",
+                       help="with --jury: which jurors sit (default: all of them)")
+
+    jury_args(p_run)
+
     p_build = sub.add_parser("build", help="start a project from nothing, with a gate from round one")
     session_args(p_build, "idea", "what to build, in a sentence")
+    jury_args(p_build)
     p_build.set_defaults(func=build_cmd.run)
 
     for name, helptext, what in (
@@ -2391,6 +2432,8 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         p_flow = sub.add_parser(name, help=helptext)
         session_args(p_flow, "what", what)
+        if name in ("add", "plan"):
+            jury_args(p_flow)
         if name == "plan":
             p_flow.add_argument(
                 "--quick", action="store_true",
@@ -2537,6 +2580,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_review.add_argument("--gate", metavar="CMD",
                           help="run this first and show the reviewer its output, e.g. \"pytest -q\"")
     p_review.set_defaults(func=cmd_review)
+
+    p_jury = sub.add_parser(
+        "jury",
+        help="a simulated panel — user, client, investor, judge, skeptic — judges the "
+             "product, and every objection is checked against it",
+    )
+    common(p_jury)
+    p_jury.add_argument("--stage", choices=list(jury.STAGES),
+                        help="what is being judged (default: read off the workspace)")
+    p_jury.add_argument("--panel", metavar="NAMES",
+                        help="comma-separated jurors (default: all of them — %s, and any "
+                             "in %s)" % (",".join(p.name for p in jury.DEFAULT_PERSONAS),
+                                         jury.JURY_CONFIG))
+    p_jury.add_argument("--idea", metavar="TEXT", help="the idea, for an idea-stage jury")
+    p_jury.add_argument("--rounds-of-questions", type=int, default=0, metavar="N",
+                        help="rounds in which each juror sees the others' findings and may "
+                             "revise its verdict (default 0)")
+    p_jury.add_argument("--out", metavar="PATH",
+                        help="where to write JURY.md (default: .duet/jury/<time>/JURY.md)")
+    p_jury.add_argument("--pair", metavar="A+B",
+                        help="the two agents the jurors alternate between (default: %s)" % DEFAULT_PAIR)
+    p_jury.set_defaults(func=jury.run)
 
     p_verify = sub.add_parser(
         "verify",

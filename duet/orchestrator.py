@@ -25,7 +25,7 @@ from duet.adapters.base import (
 )
 from duet.config import Config
 from duet.consensus import DebateState, Decision
-from duet.protocol import Envelope, parse_envelope
+from duet.protocol import Envelope, Issue, parse_envelope
 from duet.workspace import GateResult, Workspace
 
 Reporter = Callable[[Dict[str, Any]], None]
@@ -200,6 +200,10 @@ class Orchestrator:
                 adapter.set_turn_timeout(config.turn_timeout)
         self.sleep = SLEEP
         self.retry_delays = retry_delays()
+        # `--jury`: who builds the jurors' adapters (the tests hand one in),
+        # and one line on what the panel last decided, for the report.
+        self.jury_adapter: Optional[Callable[[str], Adapter]] = None
+        self.jury_note = ""
 
     # -- plumbing ---------------------------------------------------------
     def emit(self, kind: str, **payload: Any) -> None:
@@ -559,6 +563,70 @@ class Orchestrator:
         self.history.append("R%-2d ARBITRATION on %s -> %s (by %s)" % (round_no, issue.id, text[:80], decider))
         self.emit("arbitration_done", round=round_no, issue=issue.id, decider=decider, ruling=text)
 
+    # -- the jury ---------------------------------------------------------
+    def convene_jury(self, round_no: int) -> bool:
+        """Sit the panel on a state both agents signed. True if it reopened the session.
+
+        Verified blocker objections become open issues raised by
+        `jury:<persona>`, and the sign-offs are cleared: the pair fixes them or
+        argues them down like any other issue. The panel sits at most
+        `jury_max` times, so it cannot keep a session open forever.
+        """
+        from duet import jury
+
+        cfg = self.config
+        if cfg.jury_convened >= cfg.jury_max:
+            return False
+        try:
+            panel = jury.choose_panel(jury.load_config(cfg.root), cfg.jury_panel)
+        except jury.JuryError as exc:
+            # Checked before the session started; edited since. Say so and let
+            # the session end on the pair's agreement rather than on a typo.
+            self.emit("jury_failed", reason=str(exc))
+            self.jury_note = "the jury could not sit: %s" % exc
+            return False
+        cfg.jury_convened += 1
+        self.emit("jury_start", round=round_no, convening=cfg.jury_convened, of=cfg.jury_max,
+                  panel=[p.name for p in panel])
+        result = jury.convene(
+            root=cfg.root, agents=cfg.order(), panel=panel,
+            stage=jury.detect_stage(cfg.root, cfg.task), idea=cfg.task,
+            out=str(self.session_dir / jury.JURY_FILE),
+            make_adapter=self.jury_adapter or jury.adapter_factory(cfg),
+            shots_dir=str(self.session_dir / "jury-shots"),
+        )
+        self.jury_note = "sat %d of %d time(s); last: %s" % (
+            cfg.jury_convened, cfg.jury_max, result.summary_line())
+        opened: List[str] = []
+        for verdict, objection in result.blockers():
+            raised_by = "jury:%s" % verdict.persona.name
+            issue_id = "jury-%s-%s" % (verdict.persona.name, objection.id)
+            detail = "%s\n\nEvidence (%s): \"%s\"" % (
+                objection.detail, objection.where(), jury.normalise(objection.quote)[:400])
+            existing = self.state.issues.get(issue_id)
+            if existing is not None and existing.status in ("open", "claimed_fixed"):
+                continue
+            self.state.issues[issue_id] = Issue(
+                id=issue_id, title=objection.title, severity="blocker", detail=detail,
+                raised_by=raised_by, opened_round=round_no,
+            )
+            opened.append(issue_id)
+        self.emit("jury_done", round=round_no, convening=cfg.jury_convened, opened=opened,
+                  summary=result.summary_line(), report=result.path, exit_code=result.exit_code())
+        self.history.append("R%-2d JURY      %s%s" % (
+            round_no, result.summary_line(), " | opened: %s" % ", ".join(opened) if opened else ""))
+        if not opened:
+            self._save()
+            return False
+        self.state.signoffs.clear()
+        for name in cfg.agent_names:
+            self.pending_directive[name] = prompts.JURY_DIRECTIVE.format(
+                issues="\n".join("- `%s`" % i for i in opened),
+                report=result.path or "(not written)",
+            ) + prompts.NORMAL_DIRECTIVE
+        self._save()
+        return True
+
     # -- resuming ---------------------------------------------------------
     def restore(self, data: Dict[str, Any]) -> List[str]:
         """Rebuild the argument from a session's saved state.json.
@@ -738,6 +806,8 @@ class Orchestrator:
                     proven = self.workflow.proven(cfg.workflow_state)
                     if proven:
                         self.emit("workflow_proven", workflow=self.workflow.name, detail=proven)
+                if decision.kind == "consensus" and cfg.jury and self.convene_jury(round_no):
+                    continue
                 if decision.kind == "consensus":
                     status, reason = STATUS_CONSENSUS, decision.reason
                     break
@@ -891,6 +961,19 @@ class Orchestrator:
                     % (issue.id, issue.title, issue.severity, issue.raised_by, issue.status,
                        ": " + issue.resolution if issue.resolution else "")
                 )
+        if self.config.jury:
+            lines += ["", "## Jury", ""]
+            if self.config.jury_convened:
+                lines.append("- The simulated panel %s." % (self.jury_note or "sat %d time(s)"
+                                                            % self.config.jury_convened))
+                lines.append("- Its last report: `%s`" % (self.session_dir / "JURY.md"))
+                if self.config.jury_convened >= self.config.jury_max:
+                    lines.append("- It may not sit again this session (cap of %d reached)."
+                                 % self.config.jury_max)
+            else:
+                lines.append("- The panel never sat: %s" % (
+                    self.jury_note or "the pair never both signed off."))
+            lines.append("- A simulated panel finds gaps; it is not market evidence.")
         if self.state.arbitrations:
             lines += ["", "## Arbitration rulings", ""]
             for item in self.state.arbitrations:
