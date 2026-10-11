@@ -131,6 +131,14 @@ def make_reporter(agents: List[str], verbose: bool = True, as_json: bool = False
                 say("     " + ui.dim(event["ingest"]))
             for note in event.get("notes") or []:
                 say("     " + ui.yellow("note: " + note))
+        elif kind == "agreement_restarted":
+            files = [str(f) for f in event.get("files") or []]
+            say("     " + ui.yellow("! %s voted DONE with an edit after %s's DONE — agreement restarted"
+                                    % (event.get("agent"), event.get("peer"))))
+            say("     " + ui.dim("  changed: %s%s; %s re-checks only that"
+                                 % (", ".join(files[:8]) or "(no file listed)",
+                                    " and %d more" % (len(files) - 8) if len(files) > 8 else "",
+                                    event.get("peer"))))
         elif kind == "turn_error" and event.get("cut_off"):
             pass   # turn_cut_off already said what happened, and it was not an error
         elif kind == "turn_error":

@@ -28,7 +28,7 @@ from duet.adapters.base import (
 )
 from duet.config import AgentSpec, Config
 from duet.consensus import DebateState, Decision
-from duet.protocol import Envelope, Issue, parse_envelope
+from duet.protocol import BLOCKING_SEVERITIES, Envelope, Issue, parse_envelope
 from duet.workspace import GateResult, Workspace, failing_tests
 
 Reporter = Callable[[Dict[str, Any]], None]
@@ -212,7 +212,8 @@ def swap_pair(data: Dict[str, Any], agents: List[AgentSpec]) -> List[str]:
                 if isinstance(issue, dict) and "raised_by" in issue:
                     issue["raised_by"] = name(issue["raised_by"])
     data["last_envelope"] = envelopes
-    for field_name in ("pending_directive", "pending_reads", "pending_patch_log"):
+    for field_name in ("pending_directive", "pending_reads", "pending_patch_log",
+                       "pending_restarted"):
         data[field_name] = keys(data.get(field_name))
     data["adapters"] = {k: v for k, v in keys(data.get("adapters")).items() if k not in replaced}
 
@@ -320,6 +321,10 @@ class Orchestrator:
         self.pending_reads: Dict[str, List[str]] = {}
         self.pending_patch_log: Dict[str, List[str]] = {}
         self.pending_refused: Dict[str, List[str]] = {}
+        # "A DONE that came with an edit restarted the agreement", owed to both
+        # agents for their next prompt. Kept apart from pending_directive so it
+        # rides alongside whatever directive that turn gets, not instead of it.
+        self.pending_restarted: Dict[str, str] = {}
         self.last_envelope: Dict[str, Envelope] = {}
         self._gate_cache: Dict[str, GateResult] = {}
         # Passes from earlier sessions, shown for the opening check and kept
@@ -543,6 +548,7 @@ class Orchestrator:
             patch_log=self.pending_patch_log.pop(agent, None),
             peer_refused=self.pending_refused.pop(agent, None),
             turn_timeout=self.turn_budget(agent),
+            restarted=self.pending_restarted.pop(agent, ""),
         )
 
     def _system_prompt(self, agent: str, round_no: int) -> str:
@@ -606,6 +612,12 @@ class Orchestrator:
         digest_before = self.workspace.digest()
         prompt = self._build_prompt(agent, round_no, directive, digest_before)
         role = self.role_of(agent, round_no)
+        # The peer has signed this exact state: anything this turn changes
+        # undoes that signature, so keep the per-file hashes to name what moved.
+        peer_signoff = self.state.signoffs.get(self.state.peer_of(agent))
+        signed_before = (self.workspace.fingerprint()
+                         if ingest and peer_signoff and peer_signoff.digest == digest_before
+                         else None)
 
         self.emit("turn_start", round=round_no, agent=agent, role=role, backend=adapter.backend)
         reply, env, attempts, transient = self._send(
@@ -729,6 +741,9 @@ class Orchestrator:
         if ingest:
             report = self.state.ingest(env, digest_after)
             record.ingest = report.render()
+        restarted: List[str] = []
+        if signed_before is not None and digest_after != digest_before and env.verdict == "DONE":
+            restarted = self._agreement_restarted(agent, round_no, signed_before)
         self.last_envelope[agent] = env
         self.turns.append(record)
         self.round_no = max(self.round_no, round_no)
@@ -748,6 +763,11 @@ class Orchestrator:
                 if self.workspace.gate else "",
             )
         )
+        if restarted:
+            self.history.append(
+                "R%-2d %-6s RESTARTED agreement: DONE with an edit after %s's DONE — changed %s"
+                % (round_no, agent, self.state.peer_of(agent), ", ".join(restarted))
+            )
         self.emit(
             "turn_done",
             round=round_no,
@@ -765,8 +785,40 @@ class Orchestrator:
             notes=env.notes,
             refused=refused,
         )
+        if restarted:
+            self.emit("agreement_restarted", round=round_no, agent=agent,
+                      peer=self.state.peer_of(agent), files=restarted)
         self._save()
         return record
+
+    def _agreement_restarted(self, agent: str, round_no: int,
+                             signed_before: Dict[str, str]) -> List[str]:
+        """An agent voted DONE on a state its peer had already signed, and
+        changed files in the same turn.
+
+        Both votes say DONE, but on different files, so neither is agreement and
+        the peer has to look again. Left unsaid, the peer re-reviews the whole
+        workspace and as often as not answers with a small edit of its own — two
+        signatures that never land on the same files until the rounds run out.
+        So both are told, and the peer is told exactly which files to re-check.
+        Returns the files that changed.
+        """
+        after = self.workspace.fingerprint()
+        changed = sorted(p for p in set(signed_before) | set(after)
+                         if signed_before.get(p) != after.get(p))
+        signer = self.state.peer_of(agent)
+        shown = changed[:20]
+        files = "\n".join("- %s%s" % (p, "" if p in after else " (deleted)") for p in shown)
+        if len(changed) > len(shown):
+            files += "\n- ...and %d more" % (len(changed) - len(shown))
+        for name, advice in ((signer, prompts.RESTARTED_FOR_SIGNER),
+                             (agent, prompts.RESTARTED_FOR_EDITOR)):
+            self.pending_restarted[name] = prompts.AGREEMENT_RESTARTED_NOTE.format(
+                round=round_no, editor=agent, signer=signer,
+                files=files or "- (no file listed; the workspace state still moved)",
+                advice=advice,
+            )
+        return changed
 
     # -- arbitration ------------------------------------------------------
     def arbitrate(self, issue_id: str, round_no: int) -> None:
@@ -932,6 +984,9 @@ class Orchestrator:
         for name, log in (data.get("pending_patch_log") or {}).items():
             if name in self.adapters and isinstance(log, list):
                 self.pending_patch_log[name] = [str(line) for line in log]
+        for name, note in (data.get("pending_restarted") or {}).items():
+            if name in self.adapters and str(note or "").strip():
+                self.pending_restarted[name] = str(note)
 
         # A BLOCKED verdict is why that session stopped. The human has since
         # asked for it to carry on, so it is history, not a live position:
@@ -1207,6 +1262,7 @@ class Orchestrator:
                 "last_envelope": {k: v.to_dict() for k, v in self.last_envelope.items()},
                 "pending_reads": {k: list(v) for k, v in self.pending_reads.items()},
                 "pending_patch_log": {k: list(v) for k, v in self.pending_patch_log.items()},
+                "pending_restarted": dict(self.pending_restarted),
                 "result": (
                     {"status": result.status, "rounds": result.rounds, "reason": result.reason}
                     if result
@@ -1290,6 +1346,18 @@ class Orchestrator:
                     % (issue.id, issue.title, issue.severity, issue.raised_by, issue.status,
                        ": " + issue.resolution if issue.resolution else "")
                 )
+        # Minor issues never block a sign-off, which is the point: polish is
+        # raised instead of edited in, so agreement is not restarted for it.
+        # Still open at the end, they are the follow-up list.
+        later = [i for i in open_issues if i.severity not in BLOCKING_SEVERITIES]
+        if later:
+            lines += ["", "## Left for later", "",
+                      "Raised as minor, so they did not hold up the sign-off, and still open "
+                      "when the session ended.", ""]
+            for issue in later:
+                lines.append("- `%s` **%s** (from %s, round %d)%s"
+                             % (issue.id, issue.title, issue.raised_by, issue.opened_round,
+                                " — " + issue.detail.replace("\n", " ") if issue.detail else ""))
         if self.config.jury:
             lines += ["", "## Jury", ""]
             if self.config.jury_convened:

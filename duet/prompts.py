@@ -147,6 +147,7 @@ def turn_prompt(
     patch_log: Optional[Sequence[str]] = None,
     peer_refused: Optional[Sequence[str]] = None,
     turn_timeout: int = 0,
+    restarted: str = "",
 ) -> str:
     parts: List[str] = []
 
@@ -179,6 +180,8 @@ def turn_prompt(
             "yourself rather than take it as seen.\n%s"
             % (peer.upper(), "\n".join("- %s" % c for c in peer_refused))
         )
+    if restarted.strip():
+        parts.append("\n=== AN EDIT RESTARTED THE AGREEMENT ===\n%s" % restarted.strip())
 
     parts.append(
         "\n=== OPEN AGAINST YOU (fix, or argue down with a reason) ===\n%s"
@@ -301,7 +304,7 @@ vote DONE. Do not restate your previous message.
 """
 
 FINAL_CHECK_DIRECTIVE = """\
-FINAL CHECK — your peer has voted DONE on the current workspace state and the
+FINAL CHECK — your peer has voted DONE on exactly this workspace state and the
 gate is green. You are the last signature.
 
 Do not rubber-stamp this. Go and look at what is actually in the workspace, check
@@ -312,9 +315,36 @@ would catch:
 - is anything stubbed, faked, hardcoded or left as a TODO?
 - would someone installing this fresh, with only the README, get it working?
 
-If it holds up, vote DONE and the session ends. If it does not, raise the issue
-with the fix and vote CONTINUE — that is not a failure, it is the job.
+The rule from here on, because your peer has signed:
+- To agree, vote DONE WITHOUT CHANGING ANY FILE. That ends the session.
+- Change files only to fix something you would block on. Raise it as an issue
+  with its severity (blocker or major) saying what was wrong, fix it, and vote
+  CONTINUE — that is not a failure, it is the job.
+- Anything nicer-to-have — wording, naming, a tidier test, an extra comment — is
+  not an edit now. Raise it as a minor issue, or mention it in your message, and
+  vote DONE: minor issues do not block, and the report lists them under "left for
+  later" so nothing is lost.
+Any edit, however small, changes the workspace your peer signed. It restarts the
+agreement and costs both of you another turn.
 """
+
+AGREEMENT_RESTARTED_NOTE = """\
+In round {round}, {editor} voted DONE after {signer} had already voted DONE, and
+changed files in the same turn. That edit restarted the agreement: {signer}'s
+sign-off was on the workspace before it, so it no longer counts.
+
+What the edit changed:
+{files}
+
+{advice}"""
+
+RESTARTED_FOR_SIGNER = """\
+Re-check only that change — everything else is what you already signed. If it
+holds up, vote DONE without changing any file and the session ends."""
+
+RESTARTED_FOR_EDITOR = """\
+Once your peer has signed, agree by voting DONE without changing any file. If
+you would not block on it, raise it as a minor issue instead of editing."""
 
 JURY_DIRECTIVE = """\
 THE JURY HAS SAT, AND YOUR SIGN-OFFS DO NOT COUNT YET
