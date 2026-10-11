@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0
 
 - Fixed: `/duet running` from the skill waited on a permission prompt before it could
   run `duet status`, because the skill, unlike the command, did not pre-approve
