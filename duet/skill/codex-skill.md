@@ -7,21 +7,7 @@ The user has asked for duet — either by name (`$duet`), or by asking for a sec
 opinion, a cross-check, or for two agents to work something jointly. Whatever they
 asked for after that is the task.
 
-## If the argument is `running` or `status`
-
-Run `{{DUET}} status` and report it in one short paragraph: still going or finished, which
-round, who it is waiting on, what they are arguing about, whether the gate passes. Do not
-start a new session.
-
-## If the argument is `review`
-
-Run `duet review --reviewer claude` to get Claude
-Code's opinion on the current diff. Report the findings and say which you agree with.
-You may disagree — say so and why.
-
-## Otherwise — hand the work over
-
-The user has been talking to you and should not have to repeat any of it.
+{{ROUTING}}The user has been talking to you and should not have to repeat any of it.
 
 **1. Write the handoff note** to `/tmp/duet-context.md`: what the user is trying to
 achieve in their words, decisions already made and ruled out, constraints they stated,

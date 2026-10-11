@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: `/duet running` in Claude Code asked what to build instead of
+  reporting the running session. Claude Code lets a skill answer `/<its name>`
+  and the skill wins over the command, but only the command handled
+  `running`, `status` and `review`. That handling now lives once, in
+  `duet/skill/routing.md`, and is spliced into the skill, the command, the
+  Codex skill and prompt, the Gemini and OpenCode commands and both plugin
+  files, at the top of each. The plugin skill also checks that the duet CLI is
+  installed, as the plugin command does.
+
 ## 0.9.0
 
 - Added: `duet resume --pair A+B` carries a session on with a different pair,

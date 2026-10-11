@@ -5,6 +5,35 @@ description: Hand a task to Claude Code and ChatGPT together, so they build it a
 
 # duet — a second model in the loop
 
+The user typed `/duet` with an argument, or asked for duet in their own words.
+
+## First: is the duet CLI installed?
+
+This plugin carries the instructions; the harness is a small Python CLI. Run
+`command -v duet`. If it prints nothing, tell the user duet itself is not installed
+yet, and offer to install it with this one line (Python 3.9+):
+
+```bash
+pipx install git+https://github.com/shubharya-os/duet
+```
+
+Run it only once they say yes, then carry on below. If they have no `pipx`,
+`python3 -m pip install --user git+https://github.com/shubharya-os/duet` works too.
+
+## If the argument is `running` or `status`
+
+Run `duet status` and report it in one short paragraph: is it still going, which round,
+who it is waiting on, what they are arguing about, and whether the gate is passing.
+Nothing else. Do not start a new session.
+
+## If the argument is `review`
+
+Run `duet review` to have the other model review the current diff. Report the
+findings and say which ones you agree with. You are allowed to disagree with the reviewer —
+say so and why. Do not silently act on a finding you think is wrong.
+
+## Otherwise — hand the work over
+
 You are Claude Code. `duet` lets you bring ChatGPT in: either for a one-shot review of
 what you just did, or for a full build where the two of you take turns until you both
 sign off.
