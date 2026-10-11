@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Added: `duet resume --pair A+B` carries a session on with a different pair,
+  replacing the agents by position. Rounds, issues (with their raisers renamed
+  consistently), sign-offs, the workflow state and its baseline all stay; only
+  a replaced side's saved adapter thread is dropped, since it belongs to the
+  agent that is gone. When a turn fails because a side is out of usage quota,
+  the error now names this command with a pair that would work, e.g.
+  `duet resume <id> --pair claude:opus+claude:sonnet`.
+- Fixed: `duet login gpt` did not work with the default setup, because the
+  default ChatGPT agent is named "chatgpt" and the parser only offered `claude`
+  and `gpt` as choices. `duet login <side>` now accepts a side by backend
+  family (`claude`, `gpt`, `chatgpt`, `codex`) as well as by the agent's own
+  name.
+- Fixed: `duet page` reported a setup fault for a Chrome that was only slow,
+  not broken — "Google Chrome did not answer within 90s" could happen on a
+  heavily loaded machine even though Chrome was still alive. A step that times
+  out while Chrome is still running now gets one retry with a longer
+  allowance before it counts as a setup fault; a Chrome that never starts (or
+  dies) still fails at once with exit 3.
 - Added: gate passes are remembered across sessions. Every session and every
   `duet resume` used to run the whole gate before round 1, even over files that had
   just passed that same gate — 5 to 15 minutes on a loaded machine before an agent

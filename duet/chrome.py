@@ -60,6 +60,17 @@ class SetupError(Exception):
     """
 
 
+
+class NoAnswer(SetupError):
+    """Chrome is running but has not answered yet: slow, not broken.
+
+    Its own type because the two want different handling. A Chrome that exited
+    or broke the pipe will not answer however long duet waits; one that is
+    merely slow on a loaded machine usually will, and calling that a setup
+    fault failed a gate under a load average of 200 that passed alone.
+    """
+
+
 # What the browser is called on PATH, in the order worth trying.
 PATH_NAMES = (
     "google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
@@ -120,6 +131,9 @@ CALL_TIMEOUT = 30.0
 # build before it says anything, and calling that "Chrome did not answer" is a
 # setup fault reported for a browser that was only slow.
 START_TIMEOUT = 90.0
+# A step that ran out of time while Chrome was still alive is waited on once
+# more, this many times as long, before it counts as a setup fault.
+SLOW_RETRY_FACTOR = 2.0
 
 
 def unsupported_platform() -> Optional[str]:
@@ -262,8 +276,8 @@ class Browser:
         while b"\0" not in self._buf:
             left = deadline - time.time()
             if left <= 0:
-                raise SetupError("%s did not answer within %.0fs"
-                                 % (self._name(), budget or self.timeout))
+                raise NoAnswer("%s did not answer within %.0fs"
+                               % (self._name(), budget or self.timeout))
             try:
                 ready, _, _ = select.select([self._from_chrome_r], [], [], min(0.25, left))
             except (OSError, ValueError) as exc:
@@ -328,7 +342,20 @@ class Browser:
             message["sessionId"] = session_id
         self._send(message)
         budget = timeout or self.timeout
-        answer = self._pump(ident, time.time() + budget, budget) or {}
+        try:
+            answer = self._pump(ident, time.time() + budget, budget) or {}
+        except NoAnswer:
+            # One more go at the same step, with a longer allowance. The
+            # command is already with Chrome, so the retry is a longer wait for
+            # its answer rather than a second copy of it — sending it again
+            # would navigate twice or take a second screenshot. A Chrome that
+            # died in the meantime still fails at once, on the poll in _receive.
+            longer = budget * SLOW_RETRY_FACTOR
+            try:
+                answer = self._pump(ident, time.time() + longer, budget + longer) or {}
+            except NoAnswer:
+                raise NoAnswer("%s did not answer %s within %.0fs, waited on twice"
+                               % (self._name(), method, budget + longer))
         if "error" in answer:
             error = answer["error"] or {}
             raise SetupError("%s failed: %s" % (method, error.get("message") or error))
