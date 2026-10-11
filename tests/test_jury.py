@@ -86,7 +86,7 @@ def pin(tmp_path, script=None, peer_script=None, writes=None, error=None):
 def sit(tmp_path, *extra):
     out = tmp_path / ".duet" / "out" / "JURY.md"
     code = main(["jury", "-C", str(tmp_path), "--out", str(out), *extra])
-    return code, (out.read_text() if out.exists() else "")
+    return code, (out.read_text(encoding="utf-8") if out.exists() else "")
 
 
 # -- personas and the config format -----------------------------------------

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from fakebin import fake_cli
 from duet import chrome
 from duet.adapters.mock import envelope
 from duet.cli import build_parser, main
@@ -152,11 +153,7 @@ def test_login_accepts_every_name_for_the_chatgpt_side():
 
 
 def _fake_bin(tmp_path, name, body):
-    path = tmp_path / "bin" / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/bin/sh\n" + body + "\n")
-    path.chmod(path.stat().st_mode | stat.S_IEXEC)
-    return str(path)
+    return fake_cli(tmp_path / "bin", name, body + "\n", shebang="#!/bin/sh")
 
 
 @pytest.mark.parametrize("side", ["gpt", "chatgpt", "codex"])

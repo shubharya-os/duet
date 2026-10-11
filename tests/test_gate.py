@@ -5,6 +5,7 @@ verification and is not. So every case here is either a real signal or a None.
 """
 
 import json
+import os
 import sys
 
 import pytest
@@ -15,6 +16,12 @@ from duet.gate import describe, detect
 # interpreter that has no pytest, and that patch is visible everywhere — so
 # the real one has to be remembered before any of them runs.
 REAL_PYTHON = sys.executable
+
+# These fake a virtualenv's programs as `#!/bin/sh` scripts in `<venv>/bin`. A
+# Windows virtualenv keeps real `.exe` files in `Scripts`, which no script can
+# stand in for; the Windows layout and quoting are covered in test_windows.py.
+POSIX_VENV = pytest.mark.skipif(os.name == "nt", reason="fakes POSIX virtualenv binaries "
+                                "(<venv>/bin/<name> as sh scripts); Windows venvs hold .exe files")
 
 
 @pytest.fixture
@@ -176,6 +183,7 @@ def duet_has_no_pytest(tmp_path_factory, monkeypatch):
     return fake
 
 
+@POSIX_VENV
 def test_the_projects_own_virtualenv_is_found_when_duet_has_no_pytest(
         tmp_path, monkeypatch, duet_has_no_pytest):
     """The reported bug: an ordinary Python project, pytest in `.venv`, duet
@@ -188,6 +196,7 @@ def test_the_projects_own_virtualenv_is_found_when_duet_has_no_pytest(
     assert detect(str(tmp_path)) == "%s -q" % pytest_exe.resolve()
 
 
+@POSIX_VENV
 def test_the_projects_virtualenv_beats_duets_interpreter(tmp_path, monkeypatch):
     """Even when duet's own python has pytest, it is the wrong one: it cannot
     import the project's dependencies, so the gate would collect errors every
@@ -199,6 +208,7 @@ def test_the_projects_virtualenv_beats_duets_interpreter(tmp_path, monkeypatch):
     assert detect(str(tmp_path)) == "%s -q" % pytest_exe.resolve()
 
 
+@POSIX_VENV
 def test_the_projects_virtualenv_beats_a_pytest_on_path(tmp_path, tools_present):
     """And it beats a pytest on PATH too, which is the case that bites.
 
@@ -215,6 +225,7 @@ def test_the_projects_virtualenv_beats_a_pytest_on_path(tmp_path, tools_present)
     assert detect(str(tmp_path)) == "%s -q" % pytest_exe.resolve()
 
 
+@POSIX_VENV
 @pytest.mark.parametrize("venv", ["venv", "env"])
 def test_venv_and_env_count_too_and_python_dash_m_is_enough(
         tmp_path, monkeypatch, duet_has_no_pytest, venv):
@@ -249,6 +260,7 @@ def test_a_virtualenv_without_pytest_is_not_used(tmp_path, monkeypatch):
     assert detect(str(tmp_path)) == "%s -m pytest -q" % REAL_PYTHON
 
 
+@POSIX_VENV
 def test_a_virtualenv_path_with_a_space_is_quoted(tmp_path, monkeypatch,
                                                   duet_has_no_pytest):
     """`duet` is often run on a project under "~/My Projects/…". An unquoted
@@ -322,6 +334,8 @@ def test_a_project_local_launcher_is_runnable(tmp_path):
     assert why_unusable("missing.sh", str(tmp_path)) is not None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="single quotes and /bin/sh are POSIX shell; "
+                    "cmd.exe splitting is tested in test_windows.py")
 def test_a_quoted_interpreter_path_is_not_mistaken_for_a_missing_program():
     """`command.split()[0]` breaks on any gate whose program is quoted.
 

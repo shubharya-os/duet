@@ -307,7 +307,8 @@ def replay_fails(root: str, state: Dict) -> Optional[bool]:
                     (work / name).symlink_to(base / name)
             limit = int(state.get("gate_timeout") or DEFAULT_GATE_TIMEOUT)
             proc = subprocess.run(gate, cwd=str(work), shell=True,
-                                  capture_output=True, text=True, timeout=limit)
+                                  capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=limit)
     except subprocess.TimeoutExpired:
         # Not a pass and not a fail: it says nothing about whether the tests
         # catch the bug, and "no replay was possible" without this would leave

@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from duet.page import PAGE_RULES
+from duet.winlaunch import command as launchable
+from duet.winlaunch import quote_for_shell
 
 # Ordered: the first that matches a real signal in the project wins.
 CANDIDATES: List[Tuple[str, str]] = [
@@ -99,11 +101,19 @@ def _first_word(command: str) -> str:
     `command.split()[0]` breaks the moment a path is quoted: a gate built
     around an interpreter at "/opt/some where/python3" was judged unrunnable
     and the session refused to start, because the first "word" was `'/opt/some`.
+
+    On Windows the gate runs through cmd.exe, so it is split the way cmd reads
+    it: POSIX splitting treats a backslash as an escape and turned
+    `C:\\Python\\python.exe` into `C:Pythonpython.exe`, a program that does not
+    exist, and every gate built on an interpreter path was refused.
     """
+    windows = os.name == "nt"
     try:
-        parts = shlex.split(command)
+        parts = shlex.split(command, posix=not windows)
     except ValueError:          # unbalanced quotes; let the shell complain
         parts = command.split()
+    if windows:
+        parts = [p[1:-1] if len(p) > 1 and p[0] == p[-1] == '"' else p for p in parts]
     return parts[0] if parts else ""
 
 
@@ -142,7 +152,8 @@ def _can_start(argv: List[str]) -> bool:
     every round and vetoes both agents, so nothing is handed back unproven.
     """
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(launchable(argv), capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=60)
     except (OSError, subprocess.SubprocessError):
         return False
     return proc.returncode == 0
@@ -172,10 +183,10 @@ def _project_venv_form(command: str, base: Path) -> Optional[str]:
             continue
         tool = bindir / _tool_word(first)
         if tool.is_file() and _can_start([str(tool), "--version"]):
-            return "%s%s" % (shlex.quote(str(tool)), suffix)
+            return "%s%s" % (quote_for_shell(str(tool)), suffix)
         python = bindir / _tool_word("python")
         if python.is_file() and _can_start([str(python), "-m", first, "--version"]):
-            return "%s -m %s%s" % (shlex.quote(str(python)), first, suffix)
+            return "%s -m %s%s" % (quote_for_shell(str(python)), first, suffix)
     return None
 
 
@@ -190,7 +201,11 @@ def _python_module_form(command: str) -> Optional[str]:
 
     The path is shell-quoted: an interpreter under a directory with a space in
     it produced a gate whose first word was half a path, which duet then
-    refused to start a session on.
+    refused to start a session on. `shlex.quote`, which wraps anything holding
+    a backslash in single quotes, is right for that shell on POSIX but not
+    for cmd.exe on Windows, where every path has a backslash and single
+    quotes are not quoting at all — so the quoting follows the OS the gate
+    will actually run on, not always POSIX rules.
     """
     first, _, rest = command.partition(" ")
     if first not in ("pytest",):
@@ -203,7 +218,7 @@ def _python_module_form(command: str) -> Optional[str]:
     for python in candidates:
         if python and _can_start([python, "-m", first, "--version"]):
             return "%s -m %s%s" % (
-                shlex.quote(python), first, (" " + rest) if rest else "")
+                quote_for_shell(python), first, (" " + rest) if rest else "")
     return None
 
 
@@ -225,7 +240,7 @@ def duet_command() -> str:
     """
     if shutil.which("duet"):
         return "duet"
-    return "%s -m duet" % shlex.quote(sys.executable)
+    return "%s -m duet" % quote_for_shell(sys.executable)
 
 
 def page_gate(root: str) -> Optional[str]:

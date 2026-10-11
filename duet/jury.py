@@ -18,7 +18,6 @@ import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -26,7 +25,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from duet.protocol import SEVERITIES, iter_json_objects, slugify
-from duet.workspace import SKIP_DIRS, Workspace, changed_paths
+from duet.workspace import SKIP_DIRS, Workspace, changed_paths, stop_process_group
 
 JURY_CONFIG = "duet-jury.json"
 JURY_FILE = "JURY.md"
@@ -323,10 +322,13 @@ def walkthrough(root: str, command: str, timeout: int = WALKTHROUGH_TIMEOUT) -> 
             result.exit_code = proc.returncode
         except subprocess.TimeoutExpired:
             result.timed_out = True
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                proc.kill()
+            # Under shell=True the child is the shell, not the product; on
+            # Windows especially, killing just it left whatever it started
+            # still running and holding the output pipe, so the communicate()
+            # below waited for that instead of returning. stop_process_group
+            # stops the whole tree (taskkill /T on Windows, the process group
+            # elsewhere).
+            stop_process_group(proc)
             out, _ = proc.communicate()
         text = (out or b"").decode("utf-8", "replace")
         if len(text) > WALKTHROUGH_CHARS:

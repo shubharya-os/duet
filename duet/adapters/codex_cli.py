@@ -17,6 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from duet.winlaunch import command as launchable
+
 from duet.adapters.base import (
     DEFAULT_TURN_TIMEOUT,
     RUNTIME_FIX,
@@ -320,10 +322,10 @@ class CodexCliAdapter(Adapter):
                 index += 1
                 try:
                     proc = subprocess.run(
-                        args,
+                        launchable(args),
                         cwd=self.cwd,
                         capture_output=True,
-                        text=True,
+                        text=True, encoding="utf-8", errors="replace",
                         timeout=self.timeout,
                         # `codex exec` appends piped stdin to the prompt, so an
                         # inherited pipe makes it block forever waiting for EOF.
@@ -347,6 +349,8 @@ class CodexCliAdapter(Adapter):
                         meta={"backend": self.backend, "timed_out": True,
                               "timeout_s": self.timeout},
                     )
+                except OSError as exc:
+                    return AgentReply(text="", error="could not run codex: %s" % exc)
 
                 stdout = (proc.stdout or "").strip()
                 combined = (stdout + "\n" + (proc.stderr or "")).strip()

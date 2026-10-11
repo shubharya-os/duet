@@ -15,6 +15,13 @@ from pathlib import Path
 
 import pytest
 
+# install.sh is the macOS/Linux installer (Windows installs with pip), and these
+# tests stand in for python3, pip and an installed duet with `#!/bin/sh` fakes on
+# a POSIX PATH — none of which a Windows sh can run as the installer would see it.
+# That it parses with LF line endings everywhere is checked in test_windows.py.
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="install.sh is the POSIX installer; "
+                                "Windows installs duet with pip")
+
 REPO = Path(__file__).resolve().parents[1]
 INSTALL = REPO / "install.sh"
 

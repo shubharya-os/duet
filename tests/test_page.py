@@ -265,26 +265,35 @@ def test_a_measurement_with_nothing_wrong_produces_nothing():
 
 # -- exit codes --------------------------------------------------------------
 
-def test_a_missing_page_is_exit_3_not_exit_1(tmp_path, capsys):
+def test_a_missing_page_is_exit_3_not_exit_1(tmp_path, monkeypatch, capsys):
     """The whole point of the third code: a session that reads this as a page
-    fault rewrites CSS to fix a path that was simply wrong."""
+    fault rewrites CSS to fix a path that was simply wrong.
+
+    Every case below is about this logic, not about whether the platform can
+    run Chrome at all — which is its own exit 3, covered separately above —
+    so each neutralises the platform check the way that one does.
+    """
+    monkeypatch.setattr(page, "unsupported_platform", lambda: None)
     assert main(["page", "check", "nope.html", "-C", str(tmp_path)]) == 3
     assert "no page at nope.html" in capsys.readouterr().err
 
 
-def test_no_page_named_anywhere_is_exit_3(tmp_path, capsys):
+def test_no_page_named_anywhere_is_exit_3(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(page, "unsupported_platform", lambda: None)
     assert main(["page", "check", "-C", str(tmp_path)]) == 3
     assert page.PAGE_RULES in capsys.readouterr().err
 
 
-def test_a_broken_rules_file_is_exit_3(tmp_path, capsys):
+def test_a_broken_rules_file_is_exit_3(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(page, "unsupported_platform", lambda: None)
     (tmp_path / "landing.html").write_text("<p>hi</p>", encoding="utf-8")
     (tmp_path / page.PAGE_RULES).write_text(json.dumps({"stylez": []}), encoding="utf-8")
     assert main(["page", "check", "landing.html", "-C", str(tmp_path)]) == 3
     assert "'stylez'" in capsys.readouterr().err
 
 
-def test_a_bad_width_is_exit_3(tmp_path, capsys):
+def test_a_bad_width_is_exit_3(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(page, "unsupported_platform", lambda: None)
     (tmp_path / "landing.html").write_text("<p>hi</p>", encoding="utf-8")
     assert main(["page", "check", "landing.html", "--width", "tiny",
                  "-C", str(tmp_path)]) == 3
@@ -292,6 +301,7 @@ def test_a_bad_width_is_exit_3(tmp_path, capsys):
 
 
 def test_page_faults_are_exit_1_and_one_line_each(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(page, "unsupported_platform", lambda: None)
     (tmp_path / "landing.html").write_text("<p>hi</p>", encoding="utf-8")
     monkeypatch.setattr(page, "check_page", lambda *a, **k: [
         page.fault_line(375, "collapsed-control", "input.email is 240x20px"),
@@ -305,6 +315,7 @@ def test_page_faults_are_exit_1_and_one_line_each(tmp_path, monkeypatch, capsys)
 
 
 def test_a_clean_page_is_exit_0(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(page, "unsupported_platform", lambda: None)
     (tmp_path / "landing.html").write_text("<p>hi</p>", encoding="utf-8")
     monkeypatch.setattr(page, "check_page", lambda *a, **k: [])
     assert main(["page", "check", "landing.html", "-C", str(tmp_path)]) == 0
@@ -312,6 +323,7 @@ def test_a_clean_page_is_exit_0(tmp_path, monkeypatch, capsys):
 
 
 def test_the_widths_asked_for_reach_the_check(tmp_path, monkeypatch):
+    monkeypatch.setattr(page, "unsupported_platform", lambda: None)
     (tmp_path / "landing.html").write_text("<p>hi</p>", encoding="utf-8")
     seen = {}
 
@@ -328,6 +340,7 @@ def test_the_widths_asked_for_reach_the_check(tmp_path, monkeypatch):
 
 
 def test_the_page_may_come_from_the_rules_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(page, "unsupported_platform", lambda: None)
     (tmp_path / "landing.html").write_text("<p>hi</p>", encoding="utf-8")
     (tmp_path / page.PAGE_RULES).write_text(
         json.dumps({"page": "landing.html"}), encoding="utf-8")

@@ -426,12 +426,9 @@ def test_the_installed_files_call_duet_by_a_path_that_resolves(tmp_path, monkeyp
 def test_a_working_duet_on_path_is_used_as_is(tmp_path, monkeypatch):
     """Preferred when it exists — but only after it has been run, which is why
     a path that merely looks right is not enough."""
-    import os
-    import stat
+    from fakebin import fake_cli
 
-    fake = tmp_path / "duet"
-    fake.write_text("#!/usr/bin/env bash\necho 'duet 0.1.0'\n")
-    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    fake = fake_cli(tmp_path, "duet", "echo 'duet 0.1.0'\n")
 
     monkeypatch.setattr("duet.cli.shutil.which",
                         lambda name: str(fake) if name == "duet" else None)

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from fakebin import fake_cli
 from duet.adapters.claude_code import ClaudeCodeAdapter
 from duet.adapters.codex_cli import CodexCliAdapter
 from duet.adapters import openai_api
@@ -19,10 +20,7 @@ from duet.adapters.openai_api import OpenAIAdapter
 
 
 def fake_bin(tmp_path: Path, name: str, body: str) -> str:
-    path = tmp_path / name
-    path.write_text("#!/usr/bin/env bash\n" + body)
-    path.chmod(path.stat().st_mode | stat.S_IEXEC)
-    return str(path)
+    return fake_cli(tmp_path, name, body)
 
 
 # -- Claude Code -----------------------------------------------------------
@@ -538,6 +536,8 @@ def test_every_unrunnable_signature_is_recognised(noise):
     assert not looks_unrunnable('{"loggedIn": true}')
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the fake reads PATH as a POSIX shell sees it "
+                    "(':'-separated, /usr/bin first); the PATH repair itself is tested below")
 def test_a_broken_interpreter_on_path_is_worked_around(tmp_path, monkeypatch):
     """A `node` earlier on PATH than the working one broke both CLIs on a real
     machine. The CLI's own directory almost certainly holds the toolchain it was
@@ -568,8 +568,8 @@ def test_the_repaired_path_puts_the_cli_directory_first(tmp_path):
     from duet.adapters.base import env_with_sibling_path
 
     binary = str(tmp_path / "bin" / "claude")
-    env = env_with_sibling_path(binary, {"PATH": "/usr/local/bin:/usr/bin"})
-    assert env["PATH"].split(":")[0] == str(tmp_path / "bin")
+    env = env_with_sibling_path(binary, {"PATH": os.pathsep.join(["/usr/local/bin", "/usr/bin"])})
+    assert env["PATH"].split(os.pathsep)[0] == str(tmp_path / "bin")
     assert "/usr/bin" in env["PATH"]           # the rest is kept
 
     # already first: left alone rather than duplicated

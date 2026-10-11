@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import contextlib
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -33,6 +32,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from duet import ui, workflows
+from duet.winlaunch import quote_for_shell
 
 TASK = """\
 Build this, from nothing, in this directory:
@@ -236,7 +236,7 @@ def write_runner(root: str) -> str:
     target = base / RUNNER_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(RUNNER, encoding="utf-8")
-    return "%s %s" % (shlex.quote(sys.executable), RUNNER_PATH)
+    return "%s %s" % (quote_for_shell(sys.executable), RUNNER_PATH)
 
 
 def starter_gate(root: str, idea: str = "") -> Optional[str]:
@@ -271,7 +271,8 @@ def gate_proves_nothing(gate: str, root: str) -> bool:
         return False
     try:
         proc = subprocess.run(gate, cwd=str(Path(root).expanduser().resolve()),
-                              shell=True, capture_output=True, text=True, timeout=300)
+                              shell=True, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=300)
     except (OSError, subprocess.SubprocessError):
         return False        # cannot start is a different problem, already checked
     return proc.returncode == 0

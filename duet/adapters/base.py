@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from duet.winlaunch import command as launchable
+
 
 @dataclass
 class AgentReply:
@@ -218,9 +220,11 @@ def run_status_check(argv: List[str], timeout: int, env: Optional[Dict[str, str]
     the caller reports that as unknown, never as signed out.
     """
     try:
-        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env)
+        return subprocess.run(launchable(argv), capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
-        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout * 3, env=env)
+        return subprocess.run(launchable(argv), capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=timeout * 3, env=env)
 
 
 def timed_out_detail(what: str, timeout: int) -> str:

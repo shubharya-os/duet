@@ -18,6 +18,7 @@ must fail there on what they assert, not on an ImportError for a new name.
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 from duet.adapters.mock import MockAdapter, envelope
@@ -181,18 +182,30 @@ def events(result):
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
+def python_gate(tmp_path, body):
+    """A gate that runs `body` as Python: the same command under sh and cmd.exe."""
+    script = tmp_path / "gate_script.py"
+    script.write_text("import os, sys, time\n" + body + "\n", encoding="utf-8")
+    return '"%s" "%s"' % (sys.executable, script)
+
+
+def counting(runs):
+    return "open(%r, 'a').write('run\\n')\n" % str(runs)
+
+
 def flaky_gate(tmp_path, first):
-    """Does `first` the first time it runs, passes every time after. The
-    counter lives outside the workspace, so the files never change."""
+    """Does `first` (Python) the first time it runs, passes every time after.
+    The counter lives outside the workspace, so the files never change."""
     marker = tmp_path / "ran-once"
     runs = tmp_path / "runs"
-    return ("echo run >> %s; if [ -f %s ]; then exit 0; fi; touch %s; %s"
-            % (runs, marker, marker, first)), runs
+    return python_gate(tmp_path, counting(runs) + (
+        "if os.path.exists(%r):\n    sys.exit(0)\nopen(%r, 'w').close()\n%s"
+        % (str(marker), str(marker), first))), runs
 
 
 def test_a_gate_that_failed_once_is_re_run_and_the_pass_is_called_flaky(tmp_path):
     gate, runs = flaky_gate(
-        tmp_path, "echo 'FAILED tests/test_page_chrome.py::test_real_chrome - Timeout'; exit 1")
+        tmp_path, "print('FAILED tests/test_page_chrome.py::test_real_chrome - Timeout'); sys.exit(1)")
     orch, result = session(tmp_path, gate)
 
     assert result.status == "consensus", result.reason
@@ -209,7 +222,8 @@ def test_a_gate_that_failed_once_is_re_run_and_the_pass_is_called_flaky(tmp_path
 
 def test_a_failure_that_repeats_is_a_failure(tmp_path):
     runs = tmp_path / "runs"
-    orch, result = session(tmp_path, "echo run >> %s; exit 1" % runs, max_rounds=4)
+    orch, result = session(tmp_path, python_gate(tmp_path, counting(runs) + "sys.exit(1)"),
+                           max_rounds=4)
 
     assert result.status != "consensus"
     assert not result.gate.ok
@@ -219,8 +233,9 @@ def test_a_failure_that_repeats_is_a_failure(tmp_path):
 
 
 def test_a_gate_that_timed_out_is_re_run_and_keeps_its_wording(tmp_path):
-    gate, runs = flaky_gate(tmp_path, "exec sleep 30")
-    orch, result = session(tmp_path, gate, gate_timeout=2)
+    gate, runs = flaky_gate(tmp_path, "time.sleep(30)")
+    # Long enough for a Python start on a loaded machine; the first run sleeps 30.
+    orch, result = session(tmp_path, gate, gate_timeout=5)
 
     assert result.status == "consensus", result.reason
     note = result.gate.headline()

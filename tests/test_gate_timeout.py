@@ -17,6 +17,7 @@ must fail there on what they assert — a missing command, a gate called
 """
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -31,7 +32,10 @@ from duet.workspace import Workspace
 DONE = envelope("I would ship this", "DONE", confidence=0.9)
 WRITE = envelope("first pass", "CONTINUE",
                  patches=[{"path": "app.py", "content": "print('hi')\n"}])
-SLOW_GATE = "sleep 30"
+# Python, not `sleep 30` / `sleep 5; false`: the gate runs through cmd.exe on
+# Windows, which has neither `sleep` nor `;`. Double quotes read the same in both.
+SLOW_GATE = '"%s" -c "import time; time.sleep(30)"' % sys.executable
+SLOW_THEN_FAILING_GATE = '"%s" -c "import sys, time; time.sleep(5); sys.exit(1)"' % sys.executable
 
 
 # -- 1. an indented code block is a code block ------------------------------
@@ -157,7 +161,7 @@ def test_a_replay_that_runs_out_of_time_is_not_a_test_result(tmp_path):
     from duet import workflows
 
     (tmp_path / "test_app.py").write_text("def test_x():\n    assert True\n")
-    state = {"gate": "sleep 5; false", "gate_timeout": 1}
+    state = {"gate": SLOW_THEN_FAILING_GATE, "gate_timeout": 1}
     workflows.snapshot(str(tmp_path), state)
     assert workflows.replay_fails(str(tmp_path), state) is None
     assert "ran out of time" in state.get("replay_note", "")
@@ -172,7 +176,7 @@ def test_refactor_does_not_call_a_slow_suite_failing(tmp_path, capsys):
 
     (tmp_path / ".duet").mkdir()
     (tmp_path / ".duet" / "config.json").write_text(json.dumps({"gate_timeout": 1}))
-    args = argparse.Namespace(what=["split it"], root=str(tmp_path), gate="sleep 5; false",
+    args = argparse.Namespace(what=["split it"], root=str(tmp_path), gate=SLOW_THEN_FAILING_GATE,
                               no_gate=False, allow_nested=False, json=False, command="")
     assert workflow_commands.run(args, "refactor") == 3
     out = capsys.readouterr().out

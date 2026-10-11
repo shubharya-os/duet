@@ -104,11 +104,9 @@ def test_a_spaced_path_invocation_actually_runs(tmp_path, monkeypatch):
     """The end-to-end version of the above: the chosen invocation is executed."""
     from duet.cli import _candidate_invocations, _invocation_works
 
-    spaced = tmp_path / "Ada Lovelace"
-    spaced.mkdir(parents=True)
-    fake = spaced / "duet"
-    fake.write_text("#!/bin/sh\necho 'duet 0.1.0'\n")
-    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    from fakebin import fake_cli
+
+    fake = fake_cli(tmp_path / "Ada Lovelace", "duet", "echo 'duet 0.1.0'\n", shebang="#!/bin/sh")
 
     monkeypatch.setattr("duet.cli.shutil.which",
                         lambda name: str(fake) if name == "duet" else None)
