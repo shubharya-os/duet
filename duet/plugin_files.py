@@ -95,7 +95,8 @@ def _command() -> str:
 
 def _skill() -> str:
     # The skill answers `/duet` too, so it checks for the CLI the same way.
-    return skill_template("SKILL.md", PRELUDE).replace("{{DUET}}", "duet")
+    text = skill_template("SKILL.md", PRELUDE).replace("{{DUET}}", "duet")
+    return text.replace("Bash(duet:*), Bash(duet:*)", "Bash(duet:*)", 1)   # both placeholders became `duet`
 
 
 def _plugin_json() -> str:

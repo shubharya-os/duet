@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: `/duet running` from the skill waited on a permission prompt before it could
+  run `duet status`, because the skill, unlike the command, did not pre-approve
+  running duet. The skill now carries the same allowed tools.
+
 ## 0.10.0
 
 - Fixed: sessions used to die silently. The usual way duet is launched — an agent's

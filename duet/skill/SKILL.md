@@ -1,6 +1,7 @@
 ---
 name: duet
 description: Hand a task to Claude Code and ChatGPT together, so they build it and check each other until both sign off. Use when the user asks for a second opinion from another model, a cross-check, "what would ChatGPT say", or wants two agents to work a task jointly. Also use when the user is about to ship something risky and wants an independent reviewer in the loop.
+allowed-tools: Bash({{DUET}}:*), Bash(duet:*), Bash(git:*), Bash(ls:*), Bash(cat:*), Read, Write
 ---
 
 # duet — a second model in the loop
