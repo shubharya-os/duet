@@ -641,6 +641,15 @@ class Plan(Workflow):
             elif "existing test" not in text.lower():
                 problems.append("%s has no section on the existing tests (%d of them)"
                                 % (self.OUTPUT, len(names)))
+        # `duet make`: every must-have in make/features.csv, by name.
+        musts = state.get("must_cover") or []
+        if text.strip() and musts:
+            lowered = text.lower()
+            uncovered = [m for m in musts if m.lower() not in lowered]
+            if uncovered:
+                problems.append(
+                    "these must-haves from make/features.csv are not covered in %s: %s"
+                    % (self.OUTPUT, ", ".join(uncovered[:12]) + (" …" if len(uncovered) > 12 else "")))
         if not problems:
             return None
         return "Not a plan yet: " + "; ".join(problems) + ". Both sign-offs are cleared until then."

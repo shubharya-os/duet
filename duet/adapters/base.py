@@ -322,6 +322,15 @@ class Adapter:
         """
         return "" if self.edits_workspace else "no tools in this workspace"
 
+    def allow_web(self) -> str:
+        """Let this agent search and read the public web, if the backend can.
+
+        Granted to `duet make`'s research pass and to nothing else: every other
+        session keeps the permissions it always had. Returns what was granted,
+        or "" when this backend has no web tools to grant.
+        """
+        return ""
+
     @classmethod
     def probe(cls, config: Optional[Dict[str, Any]] = None) -> Probe:
         return Probe(ok=False, detail="no probe implemented for %s" % cls.backend)

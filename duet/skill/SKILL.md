@@ -67,6 +67,16 @@ both agents sign off, its verified blockers reopening the session as issues (at 
 twice). Tell the user plainly it is models playing stakeholders: it finds gaps, it is
 not market evidence.
 
+**Build from references.** `{{DUET}} make "<what to build>" --like https://app.example`
+runs recon (public pages only, the one pass given web tools) into `make/recon.md` and
+`make/features.csv`, then `plan`, then `build` (or `add`), then scores parity itself —
+a done row needs a test or file that exists — and sweeps the product for the
+references' names, domains and colours; exit 1 while a must-have is not done or the
+sweep is dirty, and a build session cannot finish dirty. `--stage recon|plan|build|parity|sweep`
+runs one. Tell the user the fine print: it rebuilds what an app does, never what it
+owns — no code, logos, trademarks, copy, content or private APIs; public sources only;
+rebrand before launch; not legal advice.
+
 `fix`, `add` and `refactor` need the project's test command; if duet cannot find one,
 it says so and stops, and you should pass `--gate`. Tell the user which rule the
 session was held to when you report back — "both agreed, and the tests were replayed

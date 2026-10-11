@@ -24,6 +24,7 @@ from duet import page as page_check
 from duet import workflow_commands
 from duet import from_ecc
 from duet import jury
+from duet import make as make_cmd
 from duet.config import (
     BACKEND_ALIASES,
     DEFAULT_GATE_TIMEOUT,
@@ -340,6 +341,13 @@ def build_config(args: argparse.Namespace) -> Config:
     cfg.fresh_gate = bool(getattr(args, "fresh_gate", False))
     if getattr(args, "quick", False):
         cfg.workflow_state["quick"] = True
+    # `duet make`: the must-haves a plan has to name, and the references a
+    # build may not finish with still in it. In workflow_state so a resumed
+    # session is held to them too.
+    if getattr(args, "must_cover", None):
+        cfg.workflow_state["must_cover"] = list(args.must_cover)
+    if getattr(args, "clean_room", None):
+        cfg.workflow_state["clean_room"] = dict(args.clean_room)
     if getattr(args, "jury", False):
         cfg.jury = True
         cfg.jury_panel = getattr(args, "panel", "") or ""
@@ -2522,6 +2530,24 @@ def build_parser() -> argparse.ArgumentParser:
                 help="two turns: a full draft, then one review that may edit it — "
                      "minutes, not rounds; reported as reviewed, not as signed off by both")
         p_flow.set_defaults(func=lambda a, _n=name: workflow_commands.run(a, _n))
+
+    p_make = sub.add_parser(
+        "make",
+        help="build from an idea and reference apps: recon, plan, build, parity, sweep",
+        description="From an idea — with reference apps if you have them — research what "
+                    "exists, reverse-engineer the references' features and flows from public "
+                    "sources, plan, build, score parity against the references, and refuse to "
+                    "finish while anything of the originals is left in the product.",
+        epilog=make_cmd.FINE_PRINT + "\n\n" + make_cmd.JURY_POINTER[0].upper()
+               + make_cmd.JURY_POINTER[1:],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    session_args(p_make, "what", "what to build, in a sentence")
+    p_make.add_argument("--like", action="append", metavar="URL_OR_APP",
+                        help="a reference app, by public URL or name (repeatable)")
+    p_make.add_argument("--stage", choices=make_cmd.STAGES,
+                        help="run one stage, reading what the previous ones wrote under make/")
+    p_make.set_defaults(func=make_cmd.run)
 
     p_page = sub.add_parser(
         "page",

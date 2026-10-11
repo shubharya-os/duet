@@ -109,6 +109,15 @@ class ClaudeCodeAdapter(Adapter):
                 self.disallowed_tools.append(tool)
         return "edit tools denied (%s)" % ", ".join(self.WRITE_TOOLS)
 
+    WEB_TOOLS = ("WebSearch", "WebFetch")
+
+    def allow_web(self) -> str:
+        """Allow the web tools by name; nothing else changes."""
+        for tool in self.WEB_TOOLS:
+            if tool not in self.allowed_tools:
+                self.allowed_tools.append(tool)
+        return "web tools allowed (%s)" % ", ".join(self.WEB_TOOLS)
+
     def _command(self, prompt: str, system: str) -> List[str]:
         cmd = list(self.launch) + ["-p", prompt, "--output-format", "json"]
         if self.permission_mode == "bypass":

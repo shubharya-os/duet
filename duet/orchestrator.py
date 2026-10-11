@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from duet import gate_cache, page, prompts, workflows
+from duet import gate_cache, make, page, prompts, workflows
 from duet.adapters import build as build_adapter
 from duet.adapters.base import (
     DEFAULT_TURN_TIMEOUT,
@@ -833,22 +833,27 @@ class Orchestrator:
                     )
 
                 decision = self.state.decide(record.digest, (record.gate or gate).ok, cfg.on_blocked)
-                if decision.kind == "consensus" and self.workflow:
+                if decision.kind == "consensus" and (self.workflow or cfg.workflow_state.get("clean_room")):
                     # Both agents agree; the workflow's rule gets the last word,
                     # because it is checked against what happened rather than
-                    # against what either of them says happened.
-                    veto = self.workflow.veto(cfg.root, cfg.workflow_state)
+                    # against what either of them says happened. `duet make`'s
+                    # clean-room sweep is held the same way, workflow or not.
+                    rule = self.workflow.name if self.workflow else ""
+                    veto = self.workflow.veto(cfg.root, cfg.workflow_state) if self.workflow else None
+                    if not veto:
+                        veto = make.sweep_veto(cfg.root, cfg.workflow_state)
+                        rule = "clean-room" if veto else rule
                     if veto:
-                        self.emit("workflow_veto", workflow=self.workflow.name, reason=veto)
+                        self.emit("workflow_veto", workflow=rule, reason=veto)
                         self.state.signoffs.clear()
                         for name in cfg.agent_names:
                             self.pending_directive[name] = (
                                 "THE `%s` RULE IS NOT MET, SO THE SIGN-OFFS DO NOT COUNT\n\n%s\n\n"
-                                % (self.workflow.name, veto)
+                                % (rule, veto)
                             ) + prompts.NORMAL_DIRECTIVE
                         self._save()
                         continue
-                    proven = self.workflow.proven(cfg.workflow_state)
+                    proven = self.workflow.proven(cfg.workflow_state) if self.workflow else ""
                     if proven:
                         self.emit("workflow_proven", workflow=self.workflow.name, detail=proven)
                 if decision.kind == "consensus" and cfg.jury and self.convene_jury(round_no):
