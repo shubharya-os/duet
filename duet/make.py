@@ -50,6 +50,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 from duet import ui
+from duet.protocol import iter_json_objects
 from duet.workspace import SKIP_DIRS as WORKSPACE_SKIP_DIRS
 
 STAGES = ("recon", "plan", "build", "parity", "sweep")
@@ -375,6 +376,11 @@ BINARY_SUFFIXES = {
     ".eot", ".mp3", ".mp4", ".mov", ".wav", ".ogg", ".webm", ".sqlite", ".db",
 }
 _HEX = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+# How far apart a colour's red, green and blue may be (of 255) for it to count
+# as neutral — white, black or a grey, perhaps faintly tinted.
+NEUTRAL_TOLERANCE = 16
+NEUTRAL_REASON = ("white, black and greys are in almost every product, so they say "
+                  "nothing about the references and would keep the sweep dirty forever")
 
 
 @dataclass
@@ -383,8 +389,18 @@ class Brand:
     domains: List[str] = field(default_factory=list)
     colors: List[str] = field(default_factory=list)     # #rrggbb, lower case
 
+    @property
+    def distinctive(self) -> List[str]:
+        """The colours the sweep looks for: every one that is not neutral."""
+        return [c for c in self.colors if not is_neutral(c)]
+
+    @property
+    def neutral(self) -> List[str]:
+        """The colours the sweep ignores, and says so."""
+        return [c for c in self.colors if is_neutral(c)]
+
     def empty(self) -> bool:
-        return not (self.names or self.domains or self.colors)
+        return not (self.names or self.domains or self.distinctive)
 
     def to_dict(self) -> Dict[str, List[str]]:
         return {"avoid": list(self.names), "domains": list(self.domains),
@@ -406,6 +422,15 @@ def normalise_color(value: str) -> str:
     if len(digits) == 3:
         digits = "".join(c * 2 for c in digits)
     return "#" + digits
+
+
+def is_neutral(color: str) -> bool:
+    """White, black or a grey: its channels within NEUTRAL_TOLERANCE of each other."""
+    digits = normalise_color(color)[1:]
+    if not digits:
+        return False
+    channels = [int(digits[i:i + 2], 16) for i in (0, 2, 4)]
+    return max(channels) - min(channels) <= NEUTRAL_TOLERANCE
 
 
 def name_from_domain(host: str) -> str:
@@ -489,7 +514,7 @@ def _patterns(brand: Brand) -> List[Tuple[str, "re.Pattern[str]"]]:
         out.append(("name %r" % name, re.compile(joined, re.IGNORECASE)))
     for domain in brand.domains:
         out.append(("domain %r" % domain, re.compile(re.escape(domain), re.IGNORECASE)))
-    for color in brand.colors:
+    for color in brand.distinctive:
         digits = color[1:]
         forms = [r"#" + digits, r"0x" + digits]
         if all(digits[i] == digits[i + 1] for i in (0, 2, 4)):
@@ -596,19 +621,23 @@ Return exactly these blocks, and nothing the harness should write outside them:
 references, the alternatives, what they lack, and what users of the idea need)
 --- END make/recon.md ---
 
---- BEGIN make/features.csv ---
-{columns}
-(one row per feature: priority must|should|could; status todo; source the
-public http(s) URL you saw it on — a row without one does not count; a feature
-none of the references have gets notes starting "extra:")
---- END make/features.csv ---
-
 --- BEGIN make/brand.json ---
 {{"avoid": [names to keep out of the product], "domains": [their domains],
- "colors": [their brand colours as #rrggbb]}}
+ "colors": [their distinctive brand hues as #rrggbb]}}
 --- END make/brand.json ---
 
-Then end with the JSON envelope, verdict DONE."""
+For colors, give only the hues that identify a reference — its signature
+accent, say. Never white, black or a grey: every product has those, so they say
+nothing about the reference, and the sweep ignores them.
+
+Then end with the JSON envelope, verdict DONE, carrying the features as data in
+a "features" list — not as CSV text; the harness writes make/features.csv:
+
+{{"message": "...", "verdict": "DONE", "features": [{{{fields}}}, ...]}}
+
+One object per feature: priority must|should|could; status todo; source the
+public http(s) URL you saw it on — a row without one does not count; a feature
+none of the references have gets notes starting "extra:"."""
 
 _BLOCK = re.compile(r"^-{3}\s*BEGIN\s+make/([\w.\-]+)\s*-{3}\s*$(.*?)^-{3}\s*END\s+make/\1\s*-{3}\s*$",
                     re.MULTILINE | re.DOTALL)
@@ -622,6 +651,42 @@ def recon_goal(idea: str, likes: Sequence[str]) -> str:
                 % (idea, "\n".join("- " + like for like in likes)))
     return ("Research what already exists for this idea: %s\n\nThe alternatives people "
             "use now, what each lacks, and what users of the idea need from it." % idea)
+
+
+def envelope_features(text: str) -> Optional[List[Dict[str, str]]]:
+    """The "features" rows in the reply's envelope as {column: text}, or None.
+
+    The envelope is the last JSON object in the reply with a verdict, a message
+    or features, the way duet picks any envelope. A cell that is not text (a
+    number, say) is kept as JSON rather than dropped; an item that is not an
+    object is skipped.
+    """
+    candidates = [obj for obj, _ in iter_json_objects(text or "")
+                  if "features" in obj or "verdict" in obj or "message" in obj]
+    value = candidates[-1].get("features") if candidates else None
+    if not isinstance(value, list):
+        return None
+    rows: List[Dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        cells = {str(k).strip().lower(): v for k, v in item.items()}
+        row: Dict[str, str] = {}
+        for column in COLUMNS:
+            cell = cells.get(column)
+            row[column] = cell if isinstance(cell, str) else "" if cell is None else json.dumps(cell)
+        rows.append(row)
+    return rows
+
+
+def features_csv(rows: Sequence[Dict[str, str]]) -> str:
+    """make/features.csv, quoted by the csv module — quoting is never the agent's job."""
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=list(COLUMNS), lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({c: (row.get(c) or "").strip() for c in COLUMNS})
+    return out.getvalue()
 
 
 def recon_blocks(text: str) -> Dict[str, str]:
@@ -662,7 +727,8 @@ def run_recon(root: str, idea: str, likes: Sequence[str], make_adapter: Any,
         agent, enforced or "not enforced read-only", web or "no web tools on this backend"))
     ws = Workspace(root)
     before = ws.fingerprint()
-    prompt = RECON_PROMPT.format(goal=recon_goal(idea, likes), columns=",".join(COLUMNS))
+    prompt = RECON_PROMPT.format(goal=recon_goal(idea, likes), fields=", ".join(
+        '"%s": "..."' % c for c in COLUMNS if c != "evidence"))
     reply = adapter.send(prompt, system=RECON_SYSTEM.format(root=root), round_no=1)
     touched = changed_paths(before, ws.fingerprint())
     if touched:
@@ -670,12 +736,18 @@ def run_recon(root: str, idea: str, likes: Sequence[str], make_adapter: Any,
               "read-only, so nothing it returned is used" % ", ".join(touched[:8]))
         return MAKE_NOT_DONE
     blocks = recon_blocks(reply.text)
+    # The rows come as data; a features.csv block is still read from an agent
+    # that sends one, but the envelope's rows win.
+    rows = envelope_features(reply.text)
+    if rows:
+        blocks[FEATURES_FILE] = features_csv(rows)
     if not reply.ok and not blocks:
         print(ui.red("✗ ") + "the research pass did not answer: %s" % (reply.error or "no reply"))
         return MAKE_CANNOT
     missing = [n for n in (RECON_FILE, FEATURES_FILE) if n not in blocks]
     if missing:
-        print(ui.red("✗ ") + "the research pass returned no %s" % " or ".join(missing))
+        print(ui.red("✗ ") + "the research pass returned no %s" % " or ".join(
+            "features in its envelope" if n == FEATURES_FILE else n for n in missing))
         return MAKE_NOT_DONE
     folder = make_dir(root)
     folder.mkdir(parents=True, exist_ok=True)
@@ -814,6 +886,15 @@ def run_parity(root: str) -> int:
               % (row.feature, row.evidence))
     for row in result.musts_left:
         print(ui.red("  must-have not done ") + row.feature)
+    for row in result.rejected:
+        print(ui.yellow("  dropped ") + "line %d: %s — %s" % (
+            row.line, row.feature or "(no name)", "; ".join(row.problems)))
+    for row in result.skipped:
+        print(ui.dim("  not scored ") + "line %d: %s — skipped: %s"
+              % (row.line, row.feature, row.notes))
+    for row in result.extra:
+        print(ui.dim("  not scored ") + "line %d: %s — not in the references: %s"
+              % (row.line, row.feature, row.notes))
     print(ui.dim("  report: ") + str(folder / PARITY_FILE))
     if result.shippable:
         print(ui.green("shippable: every must-have is done."))
@@ -824,12 +905,15 @@ def run_parity(root: str) -> int:
 
 
 def run_sweep(root: str, brand: Brand) -> int:
+    if brand.neutral:
+        print(ui.dim("  ignored ") + "%s — neutral colours: %s"
+              % (", ".join(brand.neutral), NEUTRAL_REASON))
     if brand.empty():
         print(ui.yellow("  sweep  ") + "nothing to sweep for: no --like, and no names, "
-              "domains or colours in make/brand.json")
+              "domains or distinctive colours in make/brand.json")
         return MAKE_OK
     findings = sweep(root, brand)
-    print(ui.dim("  sweep  ") + "for %s" % ", ".join(brand.names + brand.domains + brand.colors))
+    print(ui.dim("  sweep  ") + "for %s" % ", ".join(brand.names + brand.domains + brand.distinctive))
     for finding in findings[:50]:
         print(ui.red("  found ") + "%s  %s  %s" % (finding.where(), ui.dim(finding.term),
                                                   finding.text if finding.line else ""))

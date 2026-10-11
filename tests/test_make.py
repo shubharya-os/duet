@@ -143,6 +143,20 @@ def test_parity_stage_writes_the_report_and_exits_1_with_a_must_left(tmp_path):
     assert "counted as todo" in report.lower()
 
 
+def test_parity_stage_prints_every_row_that_does_not_count(tmp_path, capsys):
+    product(tmp_path)
+    write_ledger(tmp_path, csv_of(
+        ("shared shelf", "a", "must", SOURCE, "done", "test_shared_shelf", ""),
+        ("gift cards", "a", "should", SOURCE, "skip", "", "not for a club"),
+        ("reminder emails", "a", "should", "", "todo", "", ""),
+        ("offline club", "a", "could", SOURCE, "todo", "", "extra: none of them do it")))
+    assert main(["make", "--stage", "parity", "-C", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "line 4: reminder emails — no source" in out
+    assert "line 3: gift cards" in out and "not for a club" in out
+    assert "line 5: offline club" in out and "none of them do it" in out
+
+
 def test_parity_stage_exits_0_when_every_must_is_done(tmp_path):
     product(tmp_path)
     write_ledger(tmp_path, csv_of(
@@ -217,6 +231,45 @@ def test_sweep_stage_exits_1_while_dirty_and_0_when_clean(tmp_path):
     assert main(["make", "--stage", "sweep", "-C", str(tmp_path)]) == 0
 
 
+GENERIC_PALETTE = ["#1e1e1e", "#7a5cf0", "#f5f5f5", "#ffffff"]
+
+
+def test_the_sweep_ignores_neutral_colours_and_says_why(tmp_path, capsys):
+    # A recon pass that listed white, light grey and near-black with the one hue
+    # that identifies the reference: the sweep could never come back clean.
+    folder = tmp_path / "make"
+    folder.mkdir()
+    (folder / "brand.json").write_text(json.dumps(
+        {"avoid": [], "domains": [], "colors": GENERIC_PALETTE}))
+    (tmp_path / "style.css").write_text(
+        "body { background: #fff; color: #1E1E1E; }\n.card { background: #f5f5f5; }\n")
+    assert main(["make", "--stage", "sweep", "-C", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "ignored" in out and "neutral" in out
+    for color in ("#1e1e1e", "#f5f5f5", "#ffffff"):
+        assert color in out
+    # the distinctive hue is still swept
+    (tmp_path / "accent.css").write_text("a { color: #7A5CF0; }\n")
+    assert main(["make", "--stage", "sweep", "-C", str(tmp_path)]) == 1
+    assert "accent.css:1" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("color, neutral", [
+    ("#ffffff", True), ("#000", True), ("#1e1e1e", True), ("#f5f5f5", True),
+    ("#f8f9fa", True), ("#7a5cf0", False), ("#ff3366", False), ("#e0e0ff", False),
+])
+def test_neutral_is_channels_within_a_small_tolerance(color, neutral):
+    assert make.is_neutral(color) is neutral
+
+
+def test_the_build_veto_ignores_neutral_colours(tmp_path):
+    (tmp_path / "style.css").write_text("body { background: #ffffff; color: #1e1e1e; }\n")
+    state = {"clean_room": {"avoid": [], "domains": [], "colors": GENERIC_PALETTE}}
+    assert make.sweep_veto(str(tmp_path), state) is None
+    (tmp_path / "accent.css").write_text("a { color: #7a5cf0; }\n")
+    assert "accent.css" in make.sweep_veto(str(tmp_path), state)
+
+
 def test_brand_json_colours_are_swept(tmp_path):
     folder = tmp_path / "make"
     folder.mkdir()
@@ -246,10 +299,10 @@ member chat,club,could,,todo,,
 """ % HEADER
 
 
-def pin_mocks(root, reply):
+def pin_mocks(root, reply, **fields):
     """Both agents are mocks; the first one is the research pass."""
     (root / ".duet").mkdir(parents=True, exist_ok=True)
-    spec = {"script": [reply + "\n\n" + envelope("research done", "DONE")]}
+    spec = {"script": [reply + "\n\n" + envelope("research done", "DONE", **fields)]}
     (root / ".duet" / "config.json").write_text(json.dumps({
         "agents": [{"name": "claude", "backend": "mock", "model": "", "options": spec},
                    {"name": "chatgpt", "backend": "mock", "model": "", "options": spec}],
@@ -306,6 +359,45 @@ def test_the_whole_pipeline_runs_in_order_and_only_recon_gets_the_web(tmp_path, 
     # the web went to the research pass, before any session, and to nothing else
     assert granted == [0]
     assert all(not any(s["web"]) for s in sessions)
+
+
+RECON_NOTES_ONLY = """--- BEGIN make/recon.md ---
+# Recon
+Screens: canvas, toolbar. Flow: draw, group, export.
+--- END make/recon.md ---
+"""
+
+CANVAS_FEATURES = [
+    {"feature": "Grouping and layering (z-order, bring to front, send back)",
+     "area": "tools", "priority": "must", "source": "https://sketchpad.example/docs/layers",
+     "status": "todo", "notes": ""},
+    {"feature": "Export to PNG, SVG, or a shareable link", "area": "sharing",
+     "priority": "should", "source": "https://sketchpad.example/docs/export",
+     "status": "todo", "notes": "quotes \"as-is\", commas, too"},
+    {"feature": "freehand pen", "area": "tools", "priority": "must",
+     "source": "https://sketchpad.example/docs/pen"},
+]
+
+
+def test_recon_writes_features_csv_from_the_envelope_so_commas_cannot_drop_a_row(tmp_path, capsys):
+    pin_mocks(tmp_path, RECON_NOTES_ONLY, features=CANVAS_FEATURES)
+    assert main(["make", "an infinite canvas", "--stage", "recon", "-C", str(tmp_path)]) == 0
+    rows, problems = make.read_features(str(tmp_path))
+    assert problems == []
+    assert [r.feature for r in rows] == [f["feature"] for f in CANVAS_FEATURES]
+    assert all(r.counts for r in rows), [r.problems for r in rows]
+    assert rows[0].area == "tools" and rows[0].priority == "must"
+    assert rows[1].notes == "quotes \"as-is\", commas, too"
+    assert rows[2].status == "todo"
+    assert "do not count" in capsys.readouterr().out
+    assert [r.feature for r in make.must_haves(rows)] == [
+        CANVAS_FEATURES[0]["feature"], "freehand pen"]
+
+
+def test_the_recon_prompt_asks_for_data_and_distinctive_hues():
+    prompt = " ".join(make.RECON_PROMPT.split())
+    assert '"features"' in prompt and "distinctive" in prompt
+    assert "never white, black or a grey" in prompt.lower()
 
 
 def test_a_dirty_product_stops_the_pipeline_at_the_sweep(tmp_path, sessions):
