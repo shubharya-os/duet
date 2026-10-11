@@ -37,6 +37,9 @@ duet refactor "split parser.py in two"       # existing tests may not change by 
 duet plan "move storage to Postgres"         # both argue it out; only PLAN.md may change
                                              # --quick: one draft, one review, ~5 min
 duet review                                  # a second model reads your diff, read-only
+duet make "a booking app" --like URL         # research the references, build, score parity, clean room
+duet jury                                    # simulated users, clients, investors, judges; every point quoted
+duet page check index.html                   # a website's gate: what renders wrong at desktop and phone widths
 ```
 
 Each one states a rule and **checks it** against what actually happened — the gate the
