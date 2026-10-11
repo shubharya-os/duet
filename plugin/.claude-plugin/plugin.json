@@ -1,6 +1,6 @@
 {
   "name": "duet",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Two AI models build it and check each other; the harness runs your tests and checks the rule each workflow is held to (fix, add, refactor, build, plan).",
   "author": {
     "name": "shubharya-os",

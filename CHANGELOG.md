@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0
 
 - Added: `duet resume --pair A+B` carries a session on with a different pair,
   replacing the agents by position. Rounds, issues (with their raisers renamed
