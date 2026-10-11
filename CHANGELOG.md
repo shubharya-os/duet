@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: `duet make`'s clean-room sweep could never come back clean when recon
+  listed generic colours. A brand.json with white, light grey and near-black
+  next to the one hue that identifies the reference flagged every use of
+  white. The sweep, and the build's sweep check, now ignore neutral colours:
+  white, black and greys, meaning red, green and blue within 16 of each other.
+  `--stage sweep` names the colours it ignored and says why. The recon prompt
+  now asks only for the references' distinctive brand hues.
+- Fixed: a comma in a feature name silently dropped the feature. Recon wrote
+  features.csv by hand without quoting, so "Grouping and layering (z-order,
+  ...)" shifted its columns and was rejected as malformed. The research pass
+  now returns the rows as a `features` list in its JSON envelope, and duet
+  writes make/features.csv with the csv module. A features.csv block from an
+  agent that still sends one, and a hand-edited features.csv, are read and
+  checked as before.
+- Fixed: `duet make --stage parity` named rows that do not count only in
+  make/parity.md. It now prints on the terminal every row that is dropped
+  (e.g. "line 4: reminder emails — no source") or left out of the score
+  (skipped with a reason, or `extra:`), with its line and the reason.
+
 ## 0.9.0
 
 - Added: `duet resume --pair A+B` carries a session on with a different pair,

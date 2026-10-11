@@ -339,9 +339,11 @@ runs one on its own.
    site, help centre, pricing page, store listing, public walkthroughs) into
    `make/recon.md` — screens, flows, components, an inferred data model — and
    `make/features.csv`. Without `--like` it researches what already exists for the idea:
-   the alternatives, what they lack, what users need. The harness writes the files, and
-   checks every row: `feature, area, priority (must|should|could), source, status
-   (todo|done|partial|skip), evidence, notes`. A row whose source is not a public http(s)
+   the alternatives, what they lack, what users need. The features come back as data in
+   the pass's JSON envelope, and the harness writes features.csv from them with Python's
+   csv module, so a comma in a feature name cannot shift a row. A hand-edited
+   features.csv is read and checked the same way. Every row is checked: `feature, area,
+   priority (must|should|could), source, status (todo|done|partial|skip), evidence, notes`. A row whose source is not a public http(s)
    URL — none, a private address, credentials in it — is reported and does not count.
 2. **plan** — `duet plan`, with recon.md and features.csv as context. The plan workflow's
    own check refuses a PLAN.md that does not name every must-have.
@@ -354,12 +356,16 @@ runs one on its own.
    `tests/test_shelf.py::test_shared_shelf`, `src/shelf.py`); otherwise it is a todo.
    `skip` with a reason in notes, and features the references do not have (notes
    starting `extra:`), are listed separately and left out of the score. Writes
-   `make/parity.md`; exit 1 while any must-have is not done.
+   `make/parity.md`, and prints every row that is dropped or left out of the score, with
+   its line and the reason; exit 1 while any must-have is not done.
 5. **sweep** — the clean room. The references' names, domains and brand colours (from
    `--like`, and `make/brand.json`: `{"avoid": [...], "domains": [...], "colors": [...]}`,
    which recon fills in and `--like` is remembered in) must not appear anywhere in the
    product: contents, identifiers (`booklyShelf`, `get_bookly_id`), file names,
-   case-insensitively, colours in short hex form too (`#f36` for `#ff3366`). `.git`,
+   case-insensitively, colours in short hex form too (`#f36` for `#ff3366`). Neutral
+   colours are ignored, and the sweep says which: white, black and greys (red, green and
+   blue within 16 of each other) are in nearly every product, so they do not identify a
+   reference. Recon is asked for the distinctive brand hues only. `.git`,
    `node_modules`, build output, lock files, binaries and `make/` are skipped. Exit 1
    while anything is found — and while `duet make` runs a build session, the pair's
    consensus is refused while the sweep is dirty, the way a workflow's rule is.
