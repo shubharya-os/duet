@@ -33,18 +33,25 @@ of.
 Pass `--gate` only to override it. If it found none, say so: "done" is then just two
 models agreeing.
 
-**3. Run it:**
+**3. Run it, detached.** This tool call is itself a shell that can die — the turn gets
+cancelled, the terminal closes — and that used to take the whole session down with it,
+silently. `--detach` starts it as its own process, immune to that, and hands back a
+session id and a log path at once instead of streaming:
 
 ```bash
-{{DUET}} run "$ARGUMENTS" --context-file /tmp/duet-context.md --pair codex+claude
+{{DUET}} run "$ARGUMENTS" --context-file /tmp/duet-context.md --pair codex+claude --detach
 ```
+
+Poll it with `{{DUET}} status <id>` every so often (it also takes no id, for the newest
+session) until it reports consensus or a problem. `tail -f` the printed log if you want
+to watch it live while you wait.
 
 If the workspace is empty — no source, no tests, nothing to detect — use `build`
 instead. It sets the gate before any code exists, so it starts red, and orders the work:
 acceptance criteria first, failing tests second, implementation third.
 
 ```bash
-{{DUET}} build "$ARGUMENTS" --context-file /tmp/duet-context.md --pair codex+claude
+{{DUET}} build "$ARGUMENTS" --context-file /tmp/duet-context.md --pair codex+claude --detach
 ```
 
 **Pick the command by what the user is asking for** — each one holds the pair to a
@@ -60,7 +67,7 @@ rule the harness checks, so the right one matters more than the wording:
 | anything else | `run` | — |
 
 ```bash
-{{DUET}} fix "$ARGUMENTS" --context-file /tmp/duet-context.md --pair codex+claude
+{{DUET}} fix "$ARGUMENTS" --context-file /tmp/duet-context.md --pair codex+claude --detach
 ```
 
 `fix`, `add` and `refactor` need the project's test command; if duet cannot find one,

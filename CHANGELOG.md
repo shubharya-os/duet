@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Fixed: sessions used to die silently. The usual way duet is launched — an agent's
+  tool shell, or a terminal someone closes — killed the process with no SIGTERM or
+  SIGHUP handler installed, so there was no `session_end`, no reason, and `duet status`
+  read the missing event as "still running" forever. duet now:
+  - catches SIGTERM, SIGHUP and SIGINT: it stops the running agent or gate child,
+    saves state, and writes a `session_end` with status "interrupted" and a reason
+    naming what was running ("stopped by SIGTERM during claude's turn in round 3"),
+    plus `duet resume <id>` to continue. A second signal during that shutdown exits
+    at once.
+  - adds `--detach` to `run`, `build`, `fix`, `add`, `refactor`, `plan` and `resume`:
+    it starts the session as its own process group, immune to the shell that launched
+    it going away, writes its output to the session's log, and returns at once with
+    the session id, the log path, and how to follow it (`duet status <id>`,
+    `tail -f <log>`). Not supported on Windows. The `/duet` skill and command now
+    start sessions this way and poll `duet status` instead of streaming output,
+    since an agent's own tool shell is exactly the kind of launcher that dies.
+  - `duet status` with no session lists recent sessions and recognises a dead one —
+    no `session_end`, no live process behind it, silent longer than its turn and gate
+    limits allow — as "stopped without finishing (process gone)", with what it was
+    doing and the `duet resume <id>` command, instead of reporting it as running.
 - Fixed: `duet make`'s clean-room sweep could never come back clean when recon
   listed generic colours. A brand.json with white, light grey and near-black
   next to the one hue that identifies the reference flagged every use of

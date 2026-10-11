@@ -42,18 +42,25 @@ Only pass `--gate` when it would pick wrong, or when there is something better t
 obvious one — a subset that runs fast, or a lint step worth including. If it reports
 finding none, say so in your reply: "done" is then only the two of them agreeing.
 
-**3. Run it:**
+**3. Run it, detached.** This tool call is itself a shell that can die — the turn gets
+cancelled, the terminal closes — and that used to take the whole session down with it,
+silently. `--detach` starts it as its own process, immune to that, and hands back a
+session id and a log path at once instead of streaming:
 
 ```bash
-{{DUET}} run "$ARGUMENTS" --context-file /tmp/duet-context.md
+{{DUET}} run "$ARGUMENTS" --context-file /tmp/duet-context.md --detach
 ```
+
+Poll it with `{{DUET}} status <id>` every so often (it also takes no id, for the newest
+session) until it reports consensus or a problem. `tail -f` the printed log if you want
+to watch it live while you wait.
 
 If the workspace is empty — no source, no tests, nothing to detect — use `build`
 instead. It sets the gate before any code exists, so it starts red, and orders the work:
 acceptance criteria first, failing tests second, implementation third.
 
 ```bash
-{{DUET}} build "$ARGUMENTS" --context-file /tmp/duet-context.md
+{{DUET}} build "$ARGUMENTS" --context-file /tmp/duet-context.md --detach
 ```
 
 **Pick the command by what the user is asking for** — each one holds the pair to a
@@ -69,7 +76,7 @@ rule the harness checks, so the right one matters more than the wording:
 | anything else | `run` | — |
 
 ```bash
-{{DUET}} fix "$ARGUMENTS" --context-file /tmp/duet-context.md
+{{DUET}} fix "$ARGUMENTS" --context-file /tmp/duet-context.md --detach
 ```
 
 `fix`, `add` and `refactor` need the project's test command; if duet cannot find one,
@@ -78,8 +85,7 @@ session was held to when you report back — "both agreed, and the tests were re
 against the original code and caught the bug" is a stronger claim than "both agreed".
 
 
-Add `--pair codex+claude` if the user wants ChatGPT to lead. It streams; let it. If it
-is very long the user can open another terminal and run `{{DUET}} status`.
+Add `--pair codex+claude` if the user wants ChatGPT to lead.
 
 **4. Report back like a colleague, not a log.** When it finishes:
 

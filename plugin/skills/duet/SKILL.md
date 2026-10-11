@@ -15,8 +15,15 @@ loop that is allowed to say no, and gives that objection weight.
 ## Running it
 
 ```bash
-duet run "the task" --gate "pytest -q"
+duet run "the task" --gate "pytest -q" --detach
 ```
+
+Run it with `--detach`: a session is many minutes of two agents taking turns, and the
+shell that started it — your own tool shell, a terminal someone closes — can die long
+before they finish. Without `--detach`, that kills the session with it, silently.
+`--detach` starts it as its own process and returns at once with a session id and a log
+path; poll progress with `duet status` (an id, or none for the newest) and `tail -f`
+the log if you want to watch it live.
 
 Both agents take turns in the workspace until they agree. It never ends on one agent's
 say-so: both must vote DONE on the same workspace state, with no blocking objection open
@@ -27,7 +34,7 @@ before any code exists, so it starts red, and makes the pair agree the acceptanc
 criteria and write the failing tests before they implement anything.
 
 ```bash
-duet build "a CLI that renames photos by the date in their EXIF"
+duet build "a CLI that renames photos by the date in their EXIF" --detach
 ```
 
 Use `build` only in a directory that is empty or nearly so. In a project that already
@@ -47,7 +54,7 @@ rule the harness checks, so the right one matters more than the wording:
 | anything else | `run` | — |
 
 ```bash
-duet fix "slugify keeps punctuation: 'Hello, World!' gives 'hello,-world!'"
+duet fix "slugify keeps punctuation: 'Hello, World!' gives 'hello,-world!'" --detach
 ```
 
 **A website has a gate too.** When the project is a page rather than a test suite, use
@@ -86,7 +93,7 @@ To have the other model check work that already exists, give it that as the task
 
 ```bash
 duet run "review the current diff against the task; fix what is actually wrong" \
-  --gate "pytest -q" --rounds 4
+  --gate "pytest -q" --rounds 4 --detach
 ```
 
 ## Rules for you
