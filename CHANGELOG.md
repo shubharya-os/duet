@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0
 
 - Fixed: sessions used to die silently. The usual way duet is launched — an agent's
   tool shell, or a terminal someone closes — killed the process with no SIGTERM or

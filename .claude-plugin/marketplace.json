@@ -12,7 +12,7 @@
       "name": "duet",
       "source": "./plugin",
       "description": "Two AI models build it and check each other; the harness runs your tests and checks the rule each workflow is held to (fix, add, refactor, build, plan).",
-      "version": "0.9.0",
+      "version": "0.10.0",
       "homepage": "https://shubharya-os.github.io/duet/",
       "repository": "https://github.com/shubharya-os/duet",
       "license": "MIT",
