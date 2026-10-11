@@ -10,9 +10,16 @@ AI 에이전트 하나는 자기 숙제를 스스로 채점하고 "통과"라고
 curl -fsSL https://raw.githubusercontent.com/shubharya-os/duet/main/install.sh | sh
 ```
 
+또는 Claude Code 안에서 플러그인으로:
+
+```
+/plugin marketplace add shubharya-os/duet
+/plugin install duet@duet
+```
+
 이미 가진 Claude와 ChatGPT 구독을 그대로 사용합니다 — **API 키가 필요 없습니다**. 구독이 하나뿐이어도 동작합니다 (예: `--pair claude:opus+claude:sonnet`).
 
-## 여섯 개의 명령, 여섯 개의 규칙
+## 아홉 개의 명령, 각각 검증되는 규칙
 
 ```bash
 duet build "가계부 웹 앱"                  # 처음부터: 수용 기준 → 테스트 → 코드
@@ -21,6 +28,9 @@ duet add "report에 --json 옵션"            # 그 기능이 없으면 실패�
 duet refactor "parser.py를 둘로 분리"       # 기존 테스트는 한 바이트도 바꿀 수 없음
 duet plan "저장소를 Postgres로 이전"        # 논의 끝에 PLAN.md만 바뀔 수 있음
 duet review                                # 다른 모델이 diff를 읽기 전용으로 리뷰
+duet make "…" --like URL                   # 참고 앱 조사, 구축, 기능 동등성 점수, 클린룸 검사
+duet jury                                  # 가상의 사용자·고객·투자자·심사위원; 모든 지적은 제품을 인용
+duet page check index.html                 # 웹사이트의 게이트: 데스크톱과 모바일 폭에서 잘못 보이는 것
 ```
 
 `fix`는 완성된 테스트를 **원래 코드의 스냅샷 위에서 다시 실행**합니다. 버그가 있는 코드에서도 테스트가 통과한다면 그 테스트는 버그를 잡지 못한 것이므로, 양쪽의 승인이 취소됩니다.

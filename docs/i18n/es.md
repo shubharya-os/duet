@@ -10,9 +10,16 @@ Un solo agente de IA corrige sus propios deberes y dice que aprobó. duet añade
 curl -fsSL https://raw.githubusercontent.com/shubharya-os/duet/main/install.sh | sh
 ```
 
+O, dentro de Claude Code, como plugin:
+
+```
+/plugin marketplace add shubharya-os/duet
+/plugin install duet@duet
+```
+
 Usa las suscripciones de Claude y ChatGPT que ya tienes — **sin claves de API**. Con una sola suscripción también funciona (por ejemplo `--pair claude:opus+claude:sonnet`).
 
-## Seis comandos, seis reglas
+## Nueve comandos, cada uno con una regla comprobada
 
 ```bash
 duet build "una app web de gastos"        # desde cero: criterios, luego tests, luego código
@@ -21,6 +28,9 @@ duet add "una opción --json en report"    # un test debe fallar sin la funciona
 duet refactor "dividir parser.py en dos"  # los tests existentes no pueden cambiar ni un byte
 duet plan "migrar el almacenamiento a Postgres" # se discute y solo puede cambiar PLAN.md
 duet review                               # otro modelo revisa tu diff en modo solo lectura
+duet make "…" --like URL                  # investiga las referencias, construye, mide la paridad, sala limpia
+duet jury                                 # usuarios, clientes, inversores y jueces simulados; cada punto citado
+duet page check index.html                # la puerta de un sitio web: lo que se ve mal en escritorio y móvil
 ```
 
 `fix` **vuelve a ejecutar los tests finales sobre una copia del código original**. Si también pasan con el código con el bug, no detectan el bug, y se anulan las dos aprobaciones.

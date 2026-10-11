@@ -10,9 +10,16 @@
 curl -fsSL https://raw.githubusercontent.com/shubharya-os/duet/main/install.sh | sh
 ```
 
+或者在 Claude Code 里作为插件安装：
+
+```
+/plugin marketplace add shubharya-os/duet
+/plugin install duet@duet
+```
+
 使用你已有的 Claude 和 ChatGPT 订阅——**不需要 API key**。只有一个订阅也能用（例如 `--pair claude:opus+claude:sonnet`）。
 
-## 六个命令，六条规则
+## 九个命令，每个都有一条被检查的规则
 
 ```bash
 duet build "一个记账网页应用"     # 从零开始：先定验收标准，再写测试，最后写代码
@@ -21,6 +28,9 @@ duet add "报告加一个 --json 选项"  # 必须有一个测试在没有该功
 duet refactor "把 parser.py 拆成两个" # 已有测试一个字节都不能改
 duet plan "把存储迁移到 Postgres"  # 双方讨论后只允许修改 PLAN.md
 duet review                        # 另一个模型只读地审查你的 diff
+duet make "…" --like URL           # 研究参考应用、构建、评估功能对等、洁净室检查
+duet jury                          # 模拟的用户、客户、投资人和评委；每个意见都引用产品原文
+duet page check index.html         # 网站的门槛：检查桌面和手机宽度下的渲染问题
 ```
 
 `fix` 会把最终的测试**重放到原始代码的快照上**：如果这些测试在有 bug 的代码上也能通过，它们就没有抓住这个 bug，双方的签字会被撤销。

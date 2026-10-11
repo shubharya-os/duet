@@ -10,9 +10,16 @@ AI エージェントが1体だけだと、自分の宿題を自分で採点し�
 curl -fsSL https://raw.githubusercontent.com/shubharya-os/duet/main/install.sh | sh
 ```
 
+または Claude Code の中でプラグインとして：
+
+```
+/plugin marketplace add shubharya-os/duet
+/plugin install duet@duet
+```
+
 手持ちの Claude と ChatGPT のサブスクリプションをそのまま使います — **API キーは不要**。サブスクリプションが1つでも動きます（例: `--pair claude:opus+claude:sonnet`）。
 
-## 6つのコマンド、6つのルール
+## 9つのコマンド、それぞれに検証されるルール
 
 ```bash
 duet build "家計簿の Web アプリ"         # ゼロから: 受け入れ基準 → テスト → コード
@@ -21,6 +28,9 @@ duet add "report に --json オプション"   # その機能がないと失敗�
 duet refactor "parser.py を2つに分割"     # 既存のテストは1バイトも変えてはいけない
 duet plan "ストレージを Postgres に移行"  # 議論の末、変更してよいのは PLAN.md だけ
 duet review                               # 別のモデルが diff を読み取り専用でレビュー
+duet make "…" --like URL                  # 参考アプリを調査し、構築し、同等性を採点、クリーンルーム
+duet jury                                 # 模擬ユーザー・顧客・投資家・審査員。すべての指摘は製品を引用
+duet page check index.html                # Web サイトのゲート：デスクトップとスマホ幅での表示崩れを検出
 ```
 
 `fix` は完成したテストを**元のコードのスナップショット上で再実行**します。バグのあるコードでもテストが通るなら、そのテストはバグを捉えていないので、両者の承認は取り消されます。
