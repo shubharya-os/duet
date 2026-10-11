@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from duet import ui
-from duet.chrome import Browser, SetupError, unsupported_platform
+from duet.chrome import SLOW_RETRY_FACTOR, Browser, SetupError, unsupported_platform
 
 # The project's own rules, next to the project's own files.
 PAGE_RULES = "duet-page.json"
@@ -791,8 +791,12 @@ def render(page: Any, url: str, width: int, rules: Rules) -> Dict[str, Any]:
     page.emulate(viewport_width, height, mobile)
     page.call("Page.addScriptToEvaluateOnNewDocument", {"source": SETTLE_JS})
     page.call("Page.navigate", {"url": url})
-    if page.browser.wait_for("Page.loadEventFired", page.session_id, timeout=LOAD_TIMEOUT) is None:
-        raise SetupError("%s did not finish loading within %.0fs" % (url, LOAD_TIMEOUT))
+    # The same second chance a slow protocol answer gets: on a loaded machine a
+    # load that is merely late is not a page that never loads.
+    longer = LOAD_TIMEOUT * SLOW_RETRY_FACTOR
+    if (page.browser.wait_for("Page.loadEventFired", page.session_id, timeout=LOAD_TIMEOUT) is None
+            and page.browser.wait_for("Page.loadEventFired", page.session_id, timeout=longer) is None):
+        raise SetupError("%s did not finish loading within %.0fs" % (url, LOAD_TIMEOUT + longer))
     settle(page)
     page.evaluate(SCROLL_THROUGH_JS)
     settle(page)
@@ -954,8 +958,12 @@ def _shoot(page: Any, url: str, width: int, directory: Path, stem: str) -> str:
     page.emulate(viewport_width, height, mobile)
     page.call("Page.addScriptToEvaluateOnNewDocument", {"source": SETTLE_JS})
     page.call("Page.navigate", {"url": url})
-    if page.browser.wait_for("Page.loadEventFired", page.session_id, timeout=LOAD_TIMEOUT) is None:
-        raise SetupError("%s did not finish loading within %.0fs" % (url, LOAD_TIMEOUT))
+    # The same second chance a slow protocol answer gets: on a loaded machine a
+    # load that is merely late is not a page that never loads.
+    longer = LOAD_TIMEOUT * SLOW_RETRY_FACTOR
+    if (page.browser.wait_for("Page.loadEventFired", page.session_id, timeout=LOAD_TIMEOUT) is None
+            and page.browser.wait_for("Page.loadEventFired", page.session_id, timeout=longer) is None):
+        raise SetupError("%s did not finish loading within %.0fs" % (url, LOAD_TIMEOUT + longer))
     settle(page)
     page.evaluate(SCROLL_THROUGH_JS)
     settle(page)

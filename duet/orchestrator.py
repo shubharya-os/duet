@@ -23,7 +23,7 @@ from duet.adapters.base import (
     human_duration,
     transient_failure,
 )
-from duet.config import Config
+from duet.config import AgentSpec, Config
 from duet.consensus import DebateState, Decision
 from duet.protocol import Envelope, Issue, parse_envelope
 from duet.workspace import GateResult, Workspace
@@ -80,6 +80,106 @@ def refused_writes(refused: Sequence[str]) -> List[str]:
         elif tool == "Bash" and _WRITING_COMMAND.search(_HARMLESS_REDIRECT.sub("", target)):
             out.append(line)
     return out
+
+
+# What a backend says when the account, not the turn, is the problem. Kept
+# narrower than DURABLE_MARKERS: "sign in" or a missing binary is not fixed by
+# changing the pair, and advice to resume with one would send the user the
+# wrong way.
+QUOTA_MARKERS = ("usage limit", "quota", "allowance", "limit reached", "credit balance")
+
+
+def out_of_quota(error: str) -> bool:
+    low = " ".join((error or "").lower().split())
+    return any(marker in low for marker in QUOTA_MARKERS)
+
+
+def replacement_pair(failed: AgentSpec) -> str:
+    """A pair that does not lean on the account that just ran out.
+
+    Both sides change, because the other side of this pair may be the same
+    account (two Claude models share one allowance). ChatGPT out of quota is
+    the case that prompted this; Claude out of quota goes the other way.
+    """
+    if failed.backend == "claude-code":
+        return "codex+codex"
+    return "claude:opus+claude:sonnet"
+
+
+def swap_pair(data: Dict[str, Any], agents: List[AgentSpec]) -> List[str]:
+    """Put a new pair into a saved session's state.json, by position.
+
+    Everything else — rounds, history, issues, sign-offs, the workflow state and
+    its baseline — stays. What has to change with it is every place the saved
+    argument names an agent: the issue ledger, sign-offs, verdicts, envelopes,
+    owed directives and the arbitration record are all keyed by name, and
+    `restore` refuses an argument between names that are not in the room. So
+    the names are rewritten consistently, in one pass, from one mapping.
+
+    A side whose backend or model changed is a different agent: its saved
+    adapter state (the CLI thread it was resuming) belongs to the old one and is
+    dropped. A side that stayed the same keeps its thread under its new name.
+
+    Edits `data` in place and returns notes worth printing. Raises ValueError
+    when the saved pair is not two agents, since there is no position to swap.
+    """
+    config = data.setdefault("config", {})
+    old = [a for a in (config.get("agents") or []) if isinstance(a, dict) and a.get("name")]
+    if len(old) != len(agents):
+        raise ValueError("the saved session has %d agents and --pair names %d"
+                         % (len(old), len(agents)))
+    rename = {str(o["name"]): n.name for o, n in zip(old, agents)}
+    replaced = {n.name for o, n in zip(old, agents)
+                if (o.get("backend"), o.get("model") or "") != (n.backend, n.model or "")}
+
+    def name(value: Any) -> Any:
+        return rename.get(value, value) if isinstance(value, str) else value
+
+    def keys(mapping: Any) -> Dict[str, Any]:
+        return {name(k): v for k, v in mapping.items()} if isinstance(mapping, dict) else {}
+
+    config["agents"] = [a.to_dict() for a in agents]
+    for field_name in ("start", "decider"):
+        if config.get(field_name):
+            config[field_name] = name(config[field_name])
+
+    state = data.get("state")
+    if isinstance(state, dict):
+        state["agents"] = [name(a) for a in state.get("agents") or []]
+        for issue in state.get("issues") or []:
+            if isinstance(issue, dict):
+                issue["raised_by"] = name(issue.get("raised_by", ""))
+        state["last_verdict"] = keys(state.get("last_verdict"))
+        signoffs = keys(state.get("signoffs"))
+        for signoff in signoffs.values():
+            if isinstance(signoff, dict) and "agent" in signoff:
+                signoff["agent"] = name(signoff["agent"])
+        state["signoffs"] = signoffs
+        for record in state.get("arbitrations") or []:
+            if isinstance(record, dict) and "decider" in record:
+                record["decider"] = name(record["decider"])
+        state["claimed_by"] = {k: name(v) for k, v in (state.get("claimed_by") or {}).items()}
+
+    envelopes = keys(data.get("last_envelope"))
+    for raw in envelopes.values():
+        if isinstance(raw, dict) and "agent" in raw:
+            raw["agent"] = name(raw["agent"])
+            for issue in raw.get("issues") or []:
+                if isinstance(issue, dict) and "raised_by" in issue:
+                    issue["raised_by"] = name(issue["raised_by"])
+    data["last_envelope"] = envelopes
+    for field_name in ("pending_directive", "pending_reads", "pending_patch_log"):
+        data[field_name] = keys(data.get(field_name))
+    data["adapters"] = {k: v for k, v in keys(data.get("adapters")).items() if k not in replaced}
+
+    notes = []
+    for o, n in zip(old, agents):
+        if n.name in replaced:
+            notes.append("%s replaces %s; its earlier thread is not carried over"
+                         % (n.name, o["name"]))
+        elif n.name != o["name"]:
+            notes.append("%s is now called %s" % (o["name"], n.name))
+    return notes
 
 
 def rounds_taken(data: Dict[str, Any]) -> int:
@@ -450,9 +550,17 @@ class Orchestrator:
             digest_now = self.workspace.digest()
             changed = digest_now != digest_before
             peer = self.state.peer_of(agent)
+            error = reply.error
+            if out_of_quota(error):
+                # The work, the ledger and the baseline are all in this session;
+                # the way to keep them is to swap the side that ran out, and
+                # nothing else on screen says that command exists.
+                error = "%s\n\nTo carry this session on with a pair that has quota — its " \
+                        "rounds, issues, sign-offs and baseline kept:  duet resume %s --pair %s" % (
+                            error, self.session_id, replacement_pair(self.config.agent(agent)))
             record = TurnRecord(
                 round=round_no, agent=agent, role=role, envelope=Envelope(agent=agent, round=round_no),
-                digest=digest_now, error=reply.error, meta=dict(reply.meta),
+                digest=digest_now, error=error, meta=dict(reply.meta),
                 # A timeout that left work behind is progress: the peer picks it
                 # up from the files. A timeout that left nothing is a turn that
                 # achieved nothing, and still counts as a failure.
@@ -488,7 +596,7 @@ class Orchestrator:
             # resumed session a budget it has not used.
             if not record.never_happened:
                 self.round_no = max(self.round_no, round_no)
-            self.emit("turn_error", round=round_no, agent=agent, error=reply.error,
+            self.emit("turn_error", round=round_no, agent=agent, error=record.error,
                       cut_off=record.cut_off, never_happened=record.never_happened)
             self._save()
             return record

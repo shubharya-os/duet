@@ -532,6 +532,15 @@ PATH afterwards, `python3 -m duet` is always equivalent.
 the subscription you already pay for. duet never touches a credential; it shells out
 and afterwards asks each CLI whether it worked.
 
+`duet login <side>` signs in just one side — useful after switching to a new ChatGPT
+account, say. Name it by backend family (`claude`, `gpt`, `chatgpt`, `codex` — the
+three ChatGPT words all mean the same sign-in backend) or by the agent's own name:
+
+```bash
+duet login gpt       # the ChatGPT side, however its agent is named
+duet login chatgpt   # same side, the other common name for it
+```
+
 ```bash
 duet doctor
 ```
@@ -760,7 +769,16 @@ duet resume 20250104-142211-9f3a   # or a named one
 duet resume --rounds 20            # a new total budget, counting rounds already used
 duet resume --turn-timeout 60      # longer turns than the session that died had
 duet resume --gate "pytest -q"     # a different gate than the one it recorded
+duet resume --pair claude:opus+claude:sonnet   # carry it on with a different pair
 ```
+
+`--pair` on `resume` replaces the agents by position; everything else about the
+session — rounds, open issues, sign-offs, the workflow state and its baseline —
+stays. A side whose backend or model changed loses its saved adapter thread
+(it belongs to the agent that is gone); a side that stayed the same keeps it.
+This is the way out when a side runs out of usage quota mid-session: the error
+duet prints when that happens names the exact command to run, with a pair that
+does not lean on the same account.
 
 With no id it takes the newest session that has not agreed yet, saying which
 newer ones it stepped over and why. It refuses, and names what to type instead,

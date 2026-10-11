@@ -38,7 +38,7 @@ from duet.config import (
     parse_pair,
     save_config,
 )
-from duet.orchestrator import Orchestrator, STATUS_CONSENSUS, STATUS_REVIEWED, rounds_taken
+from duet.orchestrator import Orchestrator, STATUS_CONSENSUS, STATUS_REVIEWED, rounds_taken, swap_pair
 from duet.protocol import BLOCKING_SEVERITIES, SEVERITIES, parse_envelope
 
 PREVIEW_CHARS = 700
@@ -635,6 +635,17 @@ def cmd_init(args: argparse.Namespace) -> int:
     return cmd_doctor(args)
 
 
+# The words `duet login <side>` accepts for a side, besides an agent's name.
+# All three ChatGPT words mean the sign-in backend: the API-key backend has no
+# sign-in, and is reported as such rather than matched.
+LOGIN_FAMILIES = {
+    "claude": "claude-code",
+    "gpt": "codex-cli",
+    "chatgpt": "codex-cli",
+    "codex": "codex-cli",
+}
+
+
 def cmd_login(args: argparse.Namespace) -> int:
     """Walk both sign-ins. Neither one involves an API key.
 
@@ -651,21 +662,28 @@ def cmd_login(args: argparse.Namespace) -> int:
     plan = []
     for spec in cfg.agents:
         if spec.backend == "claude-code":
-            plan.append((spec.name, ClaudeCodeAdapter, ["auth", "login"], "Claude"))
+            plan.append((spec.name, spec.backend, ClaudeCodeAdapter, ["auth", "login"], "Claude"))
         elif spec.backend == "codex-cli":
-            plan.append((spec.name, CodexCliAdapter, ["login"], "ChatGPT"))
+            plan.append((spec.name, spec.backend, CodexCliAdapter, ["login"], "ChatGPT"))
         elif spec.backend == "openai-api":
             print(ui.yellow("%s uses the API-key backend (openai-api); nothing to sign in to." % spec.name))
             print(ui.dim("  switch it to a ChatGPT login with: duet init --pair claude+codex"))
 
     if args.agent:
-        plan = [item for item in plan if item[0] == args.agent]
+        # By name or by family: the default ChatGPT agent is called "chatgpt",
+        # and the parser used to offer only "claude" and "gpt", so neither the
+        # word it offered nor the agent's own name could pick that side.
+        wanted = args.agent.strip().lower()
+        plan = [item for item in plan
+                if item[0].lower() == wanted or LOGIN_FAMILIES.get(wanted) == item[1]]
         if not plan:
             print(ui.red("no agent named %r uses a sign-in backend" % args.agent))
+            print(ui.dim("  name a side by family (%s) or by agent name (%s)"
+                         % (", ".join(LOGIN_FAMILIES), ", ".join(s.name for s in cfg.agents))))
             return 2
 
     failures = 0
-    for name, cls, sub, account in plan:
+    for name, _backend, cls, sub, account in plan:
         probe = cls.probe()
         # `signed_in` rather than `ok`: an account that is signed in but out of
         # usage allowance fails the probe, and running `codex login` at it opens
@@ -1914,6 +1932,20 @@ def cmd_resume(args: argparse.Namespace) -> int:
                 ["start one with:  duet run \"...\""],
             )
 
+    # A side that ran out of quota mid-session used to mean hand-editing
+    # state.json: renaming the agent everywhere the ledger names it, changing
+    # its backend, and clearing the CLI thread it would otherwise try to resume.
+    # Done on a copy — the dead session's own record stays as it was.
+    pair_notes: List[str] = []
+    if getattr(args, "pair", None):
+        try:
+            data = json.loads(json.dumps(data, default=str))
+            pair_notes = swap_pair(data, parse_pair(args.pair))
+        except ValueError as exc:
+            return refuse("cannot swap the pair of session %s: %s" % (path.name, exc),
+                          ["give two agents, like:  duet resume %s --pair claude:opus+claude:sonnet"
+                           % path.name], session=path.name)
+
     cfg = Config.from_dict(data.get("config") or {})
     cfg.root = root                       # the session may have been copied or moved
     if getattr(args, "gate", None) is not None:
@@ -1968,7 +2000,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         session_id=_resumed_session_id(path.name),
     )
     try:
-        notes = orch.restore(data)
+        notes = pair_notes + orch.restore(data)
     except (ValueError, TypeError, AttributeError, KeyError) as exc:
         return refuse(
             "session %s cannot be carried on: %s" % (path.name, exc),
@@ -2579,7 +2611,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_login = sub.add_parser("login", help="sign both agents in (no API key involved)")
     common(p_login)
-    p_login.add_argument("agent", nargs="?", choices=["claude", "gpt"], help="sign in just one side")
+    p_login.add_argument("agent", nargs="?", metavar="SIDE",
+                         help="sign in just one side: claude, gpt / chatgpt / codex, or an agent's name")
     p_login.add_argument("--force", action="store_true", help="re-run the sign-in even if it looks connected")
     p_login.set_defaults(func=cmd_login)
 
@@ -2634,6 +2667,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_resume.add_argument("--fresh-gate", action="store_true", help=FRESH_GATE_HELP)
     p_resume.add_argument("--rounds", type=int, metavar="N",
                           help="new total round budget, counting the rounds already used")
+    p_resume.add_argument("--pair", metavar="A+B",
+                          help="carry the session on with a different pair, replacing the "
+                               "agents by position (e.g. claude:opus+claude:sonnet)")
     p_resume.add_argument("--gate", metavar="CMD",
                           help="use this gate instead of the one the session recorded")
     p_resume.add_argument("--allow-nested", action="store_true",

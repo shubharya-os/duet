@@ -174,8 +174,14 @@ def shell(request):
 
 
 def _run(env, shell="/bin/sh"):
+    # Its own session, so no controlling terminal. stdin=DEVNULL alone is not
+    # "no terminal": install.sh reattaches to /dev/tty when it can open it,
+    # which it can whenever pytest itself was started from one — and then it
+    # takes the interactive `duet setup` branch, so these tests passed from a
+    # bare shell and failed from a terminal or a harness that has one.
     return subprocess.run([shell, str(INSTALL)], capture_output=True, text=True,
-                          env=env, cwd=str(env["HOME"]), timeout=120, stdin=subprocess.DEVNULL)
+                          env=env, cwd=str(env["HOME"]), timeout=120, stdin=subprocess.DEVNULL,
+                          start_new_session=True)
 
 
 def test_install_sh_reaches_a_working_duet_through_the_venv_fallback(tmp_path, shell):
