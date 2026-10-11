@@ -1152,6 +1152,28 @@ wrong ignore list. Fixed: the plan rule now uses the workspace's own ignore list
 test covers it. The plan text above was graded as it stood; nothing was rerun.
 
 
+### Full-debate planning against ECC, after the convergence fix (v0.11)
+
+Before v0.11, duet's full planning debate took 8 to 23 minutes against ECC's 3 to 4,
+and reading the logs showed why: rounds spent after agreement, as each signature came
+with one more small edit. v0.11 makes agreement converge (agree without editing once the
+peer has voted DONE; polish becomes a minor issue). Re-measured on a fresh task with its
+**answer key written first** ("move webhook delivery onto a background queue with retries":
+per-subscriber ordering, the same event id on retry, re-signing at send time because the
+receiver rejects old timestamps, unsubscribe winning over the queue, 410 as final). Both
+tools started at the same second on the same machine; ECC was installed in its benchmark
+folder only and removed afterwards; graded blind twice, labels swapped.
+
+| | ECC `plan` | duet `plan` (full debate, Opus + Sonnet) |
+|---|---|---|
+| pitfalls found (blind, both orders) | 5/5 | 5/5 |
+| time | **2 min 56 s** | 3 min 43 s |
+| rounds | — | 3, both signed off, plan rule met |
+
+**ECC is still faster, by 47 seconds, and the plans tie.** What changed is the price of
+the second opinion: from 5 to 19 extra minutes down to under one. One run on one task,
+and this key hit its ceiling, so it cannot separate the two on quality.
+
 ## Install paths checked live
 
 | path | result |

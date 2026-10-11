@@ -208,7 +208,8 @@ full method and every caveat in [docs/QA.md](docs/QA.md):
 | 100 simultaneous writes, x3 | **300/300** | 218/300 | duet |
 | its own test suite | passes | hangs after 31 tests | duet |
 | planning, 5 planted pitfalls, graded blind | 4/5 and 5/5 | 4/5 and 5/5 | tie |
-| planning time, full debate | 8–10 min | **3–4 min** | **ECC** |
+| planning time, full debate (before v0.11) | 8–10 min | **3–4 min** | **ECC** |
+| planning, full debate, v0.11, fresh key, run side by side | 5/5 in 3 min 43 s | 5/5 in **2 min 56 s** | ECC by 47 s |
 | planning, `duet plan --quick`, fresh key, run side by side | 4/5 in 5 min 59 s | 4/5 in **5 min 23 s** | ECC by 36 s |
 
 `--quick` is one draft and one review, reported as *reviewed* unless both sign the same file. Details, including a bug that run exposed, in [QA.md](docs/QA.md).
