@@ -165,6 +165,12 @@ def make_reporter(agents: List[str], verbose: bool = True, as_json: bool = False
                     + ui.dim(" (give it longer with --gate-timeout MINUTES)"))
             else:
                 say("     " + ui.red("gate failed (exit %s)" % event.get("exit_code")))
+        elif kind == "gate_rerun":
+            say("     " + ui.dim("nothing changed since the gate %s; re-running it once before "
+                                 "believing it" % ("ran out of time" if event.get("timed_out")
+                                                   else "failed")))
+        elif kind == "gate_flaky":
+            say("     " + ui.yellow("! " + str(event.get("note") or "")))
         elif kind == "workflow_proven":
             say("  " + ui.green("✓ `%s` rule met: " % event.get("workflow")) + str(event.get("detail") or ""))
         elif kind == "workflow_veto":
@@ -2211,7 +2217,10 @@ def cmd_review(args: argparse.Namespace) -> int:
     # (coverage data, build output), and a view taken afterwards would show the
     # reviewer artefacts nobody wrote.
     since = getattr(args, "since", None)
-    change = ws.diff_since(since, limit=REVIEW_DIFF_CHARS) if since else ws.diff(limit=REVIEW_DIFF_CHARS)
+    # New files' text is sent below on its own budget, so the view of the change
+    # only lists them rather than carrying them twice.
+    change = (ws.diff_since(since, limit=REVIEW_DIFF_CHARS) if since
+              else ws.diff(limit=REVIEW_DIFF_CHARS, new_file_contents=False))
     is_git = ws.is_git_repo
     # Two different kinds of incomplete, kept apart: the diff itself hit the
     # character limit, or some new file did not fit. `truncated` is the union —

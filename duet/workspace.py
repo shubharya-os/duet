@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -25,6 +26,68 @@ SKIP_DIRS = {
     "dist", "build", ".next", "target", ".idea", ".vscode", ".DS_Store",
 }
 DIGEST_CHUNK_BYTES = 1_048_576
+# A new file bigger than this is listed for the reviewer, never inlined: it is
+# data or generated output, and pasting its head into a 12,000-character view
+# would only crowd out the code.
+NEW_FILE_INLINE_MAX = 200_000
+# Fewer characters of a new file than this are not worth their header: when
+# the view has no more room for a file, it is named as not shown instead.
+NEW_FILE_MIN_SHOWN = 400
+
+_DIFF_HEADER = re.compile(r"^diff --git ", re.MULTILINE)
+# The new name first (a rename's section is about where the file is now), the
+# old one for a deletion. A pure rename has no ---/+++ lines, only "rename to".
+_DIFF_PATHS = (re.compile(r"^rename to (.+)$", re.MULTILINE),
+               re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE),
+               re.compile(r"^--- a/(.+)$", re.MULTILINE))
+
+
+def _diff_sections(diff_text: str) -> List[Tuple[int, int, str]]:
+    """(start, end, path) for each file's section of a `git diff`."""
+    starts = [m.start() for m in _DIFF_HEADER.finditer(diff_text)]
+    out: List[Tuple[int, int, str]] = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(diff_text)
+        section = diff_text[start:end]
+        # Only the header, before the first hunk: a body line can look like one.
+        head_part = section.split("\n@@", 1)[0]
+        found = next((m for m in (p.search(head_part) for p in _DIFF_PATHS) if m), None)
+        if found:
+            path = found.group(1)
+        else:
+            # No ---/+++ lines (a mode change, a binary file): "a/X b/X".
+            head = section.split("\n", 1)[0][len("diff --git "):]
+            path = head[2:2 + (len(head) - 5) // 2] if len(head) > 5 else head
+        out.append((start, end, path.rstrip("\t")))
+    return out
+
+
+_FAILED_TEST = re.compile(r"^(?:FAILED|ERROR) +(\S+)", re.MULTILINE)
+
+
+def failing_tests(output: str, limit: int = 10) -> List[str]:
+    """The tests a run names as failed, when its output says so (pytest's
+    "FAILED path::test" summary lines); otherwise an empty list."""
+    names: List[str] = []
+    for m in _FAILED_TEST.finditer(output or ""):
+        if m.group(1) not in names:
+            names.append(m.group(1))
+    return names[:limit]
+
+
+def _fair_shares(needs: Sequence[int], room: int) -> List[int]:
+    """Split `room` so nobody gets more than they need and the rest share equally.
+
+    Smallest need first: each takes what it needs or an equal share of what is
+    left, whichever is less, so what a small part leaves over goes to the big ones.
+    """
+    shares = [0] * len(needs)
+    left = max(0, room)
+    order = sorted(range(len(needs)), key=lambda i: needs[i])
+    for n, i in enumerate(order):
+        shares[i] = min(needs[i], left // (len(needs) - n))
+        left -= shares[i]
+    return shares
 
 
 class PatchRejected(Exception):
@@ -49,11 +112,17 @@ class GateResult:
     # now: when it happened, in words. Only ever the opening check — see
     # duet/gate_cache.py for why nothing is counted against it.
     remembered: str = ""
+    # Set on a pass that came from re-running a failed gate over files nobody
+    # had changed: the one-line warning that the earlier failure may have been
+    # the machine, not the code. See Orchestrator.gate_for.
+    flaky: str = ""
 
     def headline(self) -> str:
         """"PASSED", "FAILED (exit 1)", or that the gate never finished."""
         if self.ok and self.remembered:
             return "PASSED (%s)" % self.remembered_note()
+        if self.ok and self.flaky:
+            return "PASSED on a re-run — " + self.flaky
         if self.ok:
             return "PASSED"
         if self.timed_out:
@@ -262,44 +331,155 @@ class Workspace:
             joined = joined[:limit] + "\n...[trimmed at %d chars]..." % limit
         return joined
 
-    def diff(self, limit: int = 12000) -> str:
+    def _new_file_body(self, rel: str) -> Tuple[Optional[str], str]:
+        """(text, "") for a new file worth inlining, else (None, why it is not)."""
+        path = self.root / rel
+        try:
+            if path.is_symlink():
+                return None, "symlink -> %s" % os.readlink(str(path))
+            size = path.stat().st_size
+            if size > NEW_FILE_INLINE_MAX:
+                return None, "too large to inline"
+            with path.open("rb") as fh:
+                raw = fh.read(NEW_FILE_INLINE_MAX + 1)
+        except OSError:
+            return None, "unreadable"
+        if b"\0" in raw[:8192]:
+            return None, "binary"
+        return raw.decode("utf-8", errors="replace"), ""
+
+    def diff(self, limit: int = 12000, new_file_contents: bool = True) -> str:
         """What the peer needs to review: the change, not the whole repo.
 
         This deliberately does not run `git add -AN` to make untracked files
         show up in the diff. duet is a guest in someone's repository and
         staging their files behind their back is not its business; new files
-        are listed separately instead.
+        are read from disk instead.
+
+        `git diff HEAD` never contains an untracked file, and a change whose
+        main code is new files is the ordinary shape of a feature. So the view
+        is built in this order, and only the last part is ever trimmed:
+
+        1. every new file, by name and size — before anything that can be cut,
+           so no budget ever hides that a file exists;
+        2. which files are not shown in full, if any, so the reviewer knows
+           exactly what to read rather than guessing where the view stopped;
+        3. the diff of changed files and the text of the new ones, sharing what
+           is left of `limit` — neither may starve the other.
+
+        `new_file_contents=False` keeps the listing but leaves the text out,
+        for a caller that sends the new files' contents its own way.
         """
         if not self.is_git_repo:
             return self.tree(limit=limit)
 
-        parts: List[str] = []
+        diff_parts: List[str] = []
         code, out = self._git("--no-pager", "diff", "--stat", "HEAD")
         if code == 0 and out.strip():
-            parts.append(out.strip())
+            diff_parts.append(out.strip())
         code, body = self._git("--no-pager", "diff", "HEAD")
         if code == 0 and body.strip():
-            parts.append(body.strip())
+            diff_parts.append(body.strip())
+        diff_text = "\n\n".join(diff_parts)
 
         new_files = self.untracked_files()
-        if new_files:
-            listing = ["NEW FILES (untracked, not shown in the diff above):"]
-            for rel in new_files[:80]:
-                try:
-                    size = (self.root / rel).stat().st_size
-                except OSError:
-                    size = -1
-                listing.append("  %8d  %s" % (size, rel))
-            if len(new_files) > 80:
-                listing.append("  ...and %d more" % (len(new_files) - 80))
-            parts.append("\n".join(listing))
-
-        if not parts:
+        if not diff_text and not new_files:
             return "(git: no changes against HEAD)"
-        joined = "\n\n".join(parts)
-        if len(joined) > limit:
-            joined = joined[:limit] + "\n...[trimmed at %d chars]..." % limit
-        return joined
+
+        sizes: Dict[str, int] = {}
+        bodies: Dict[str, str] = {}
+        why_not: Dict[str, str] = {}
+        for rel in new_files:
+            try:
+                sizes[rel] = (self.root / rel).lstat().st_size
+            except OSError:
+                sizes[rel] = -1
+            if not new_file_contents:
+                continue
+            text, reason = self._new_file_body(rel)
+            if text is None:
+                why_not[rel] = reason
+            else:
+                bodies[rel] = text
+
+        file_header = "--- NEW FILE %s ---\n"
+        changed = [rel for _, _, rel in _diff_sections(diff_text)]
+        listing_head = ("NEW FILES (untracked, so `git diff` never shows them; the text of "
+                        "those that fit follows the diff below):" if new_file_contents else
+                        "NEW FILES (untracked, so `git diff` never shows them):")
+        listing_lines = [listing_head]
+        for rel in new_files:
+            listing_lines.append("  %8d  %s%s" % (sizes[rel], rel,
+                                                  "  [%s, not shown]" % why_not[rel]
+                                                  if rel in why_not else ""))
+        listing = "\n".join(listing_lines) if new_files else ""
+
+        def shares(inlined: Dict[str, str]) -> Tuple[int, Dict[str, int]]:
+            # Headers, markers and the not-shown list cost characters too; they
+            # are taken out of the budget up front, at the most they could need,
+            # so the shares are shares of what can actually be shown and the
+            # whole view stays inside `limit` whenever the listing does.
+            fixed = (200 + len("\n...[trimmed at %d chars]..." % limit)
+                     + sum(len(file_header % rel) + len(rel) + 80 for rel in inlined)
+                     + sum(len(rel) + 3 for rel in changed + list(bodies) + list(why_not)))
+            room = max(0, limit - len(listing) - fixed)
+            # Fair shares: the diff and the new files split the room, and either
+            # one's unused half goes to the other. Within the new files, the same
+            # rule again — small files are shown whole, the big ones split the rest.
+            if not inlined:
+                return room, {}
+            diff_room, files_room = _fair_shares(
+                [len(diff_text), sum(map(len, inlined.values()))], room)
+            return diff_room, dict(zip(inlined, _fair_shares(
+                [len(b) for b in inlined.values()], files_room)))
+
+        # A file whose share would be a scrap is not inlined at all — its
+        # header and marker would only cost the others room — and is named as
+        # not shown instead. Largest first, until every inlined file gets a
+        # useful piece.
+        inlined = dict(bodies)
+        no_room: List[str] = []
+        while True:
+            diff_room, file_rooms = shares(inlined)
+            starved = [rel for rel, text in inlined.items()
+                       if file_rooms[rel] < min(len(text), NEW_FILE_MIN_SHOWN)]
+            if not starved:
+                break
+            drop = max(starved, key=lambda rel: len(inlined[rel]))
+            del inlined[drop]
+            no_room.append(drop)
+
+        not_in_full: List[str] = []
+        shown_diff = diff_text
+        if len(diff_text) > diff_room:
+            shown_diff = (diff_text[:diff_room]
+                          + "\n...[trimmed at %d chars]..." % diff_room)
+            not_in_full.extend(rel for _, end, rel in _diff_sections(diff_text) if end > diff_room)
+        shown_files = []
+        for rel, text in inlined.items():
+            allowed = file_rooms[rel]
+            if len(text) > allowed:
+                text = (text[:allowed]
+                        + "\n...[trimmed at %d of %d chars — read %s for the rest]..."
+                        % (allowed, len(text), rel))
+                not_in_full.append(rel)
+            shown_files.append((file_header % rel) + text)
+        # Listed but never inlined counts as not shown in full, too.
+        not_in_full.extend(sorted(no_room))
+        not_in_full.extend(rel for rel in new_files if rel in why_not
+                           and why_not[rel] != "binary" and not why_not[rel].startswith("symlink"))
+
+        out: List[str] = []
+        if listing:
+            out.append(listing)
+        if not_in_full:
+            out.append("NOT SHOWN IN FULL — this view was trimmed to fit; read these "
+                       "files yourself before judging them:\n"
+                       + "\n".join("  %s" % rel for rel in not_in_full))
+        if shown_diff:
+            out.append(shown_diff)
+        out.extend(shown_files)
+        return "\n\n".join(out)
 
     def tree(self, limit: int = 12000, max_entries: int = 400) -> str:
         lines = []

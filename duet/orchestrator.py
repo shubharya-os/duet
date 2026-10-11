@@ -13,7 +13,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
 from duet import gate_cache, page, prompts, workflows
 from duet.adapters import build as build_adapter
@@ -26,7 +26,7 @@ from duet.adapters.base import (
 from duet.config import Config
 from duet.consensus import DebateState, Decision
 from duet.protocol import Envelope, Issue, parse_envelope
-from duet.workspace import GateResult, Workspace
+from duet.workspace import GateResult, Workspace, failing_tests
 
 Reporter = Callable[[Dict[str, Any]], None]
 
@@ -174,6 +174,8 @@ class Orchestrator:
         # Passes from earlier sessions, shown for the opening check and kept
         # apart from _gate_cache so no sign-off is ever counted against one.
         self._remembered: Dict[str, GateResult] = {}
+        # Digests whose failed gate has had its one re-run; see gate_for.
+        self._rechecked: Set[str] = set()
         # One warning per session is enough; see _check_gate_is_read_only.
         self._gate_mutation_warned = False
         # The rule this session is held to, if any, beyond the double sign-off.
@@ -250,20 +252,51 @@ class Orchestrator:
             or DEFAULT_TURN_TIMEOUT
         )
 
-    def gate_for(self, digest: str) -> GateResult:
+    def gate_for(self, digest: str, recheck: bool = False) -> GateResult:
+        """This session's gate result for `digest`, run once and then cached.
+
+        `recheck` is passed after a turn, and only matters when the cached
+        result is a failure: a whole turn has gone by without anyone changing a
+        file, so the failure is re-run once before it is treated as settled. A
+        failure that was the machine and not the code — a test that timed out
+        under load — otherwise stayed red until an agent edited a file just to
+        get the gate run again. A failure that repeats is a failure; a pass on
+        the re-run is used, and said to be possibly flaky to everyone.
+        """
         if digest not in self._gate_cache:
-            if self.workspace.gate:
-                self.emit("gate_start", command=self.workspace.gate, digest=digest)
-            result = self.workspace.run_gate()
-            self._gate_cache[digest] = result
-            gate_cache.remember(self.config.root, digest, result)
-            if self.workflow:
-                self.workflow.on_gate(self.config.workflow_state, digest, result.ok)
-            if self.workspace.gate:
-                self.emit("gate_done", ok=result.ok, exit_code=result.exit_code, digest=digest,
-                          timed_out=result.timed_out, timeout=result.timeout)
-                self._check_gate_is_read_only(digest)
+            self._gate_cache[digest] = self._run_gate(digest)
+        elif recheck and digest not in self._rechecked:
+            first = self._gate_cache[digest]
+            if not first.ok and not first.skipped:
+                self._rechecked.add(digest)
+                self.emit("gate_rerun", digest=digest, timed_out=first.timed_out)
+                again = self._run_gate(digest, remember=False)
+                if again.ok:
+                    names = failing_tests(first.output)
+                    again.flaky = (
+                        "the gate %s once and passed on a re-run with no file changes — "
+                        "possibly flaky%s" % (
+                            "ran out of time" if first.timed_out else "failed",
+                            ": " + ", ".join(names) if names else ""))
+                    self.emit("gate_flaky", digest=digest, note=again.flaky, tests=names)
+                self._gate_cache[digest] = again
         return self._gate_cache[digest]
+
+    def _run_gate(self, digest: str, remember: bool = True) -> GateResult:
+        if self.workspace.gate:
+            self.emit("gate_start", command=self.workspace.gate, digest=digest)
+        result = self.workspace.run_gate()
+        # A pass that followed a failure on the same files is not one to carry
+        # into the next session's opening check as if it were settled.
+        if remember:
+            gate_cache.remember(self.config.root, digest, result)
+        if self.workflow:
+            self.workflow.on_gate(self.config.workflow_state, digest, result.ok)
+        if self.workspace.gate:
+            self.emit("gate_done", ok=result.ok, exit_code=result.exit_code, digest=digest,
+                      timed_out=result.timed_out, timeout=result.timeout)
+            self._check_gate_is_read_only(digest)
+        return result
 
     def opening_gate(self, digest: str) -> GateResult:
         """The gate before round 1: a pass remembered from another session, if any.
@@ -513,7 +546,9 @@ class Orchestrator:
             self.pending_refused[self.state.peer_of(agent)] = refused
 
         digest_after = self.workspace.digest()
-        gate = self.gate_for(digest_after)
+        # recheck: if this turn changed nothing and the gate was red, the red
+        # gets one re-run before it is believed.
+        gate = self.gate_for(digest_after, recheck=True)
 
         record = TurnRecord(
             round=round_no, agent=agent, role=role, envelope=env, digest=digest_after,
@@ -535,7 +570,9 @@ class Orchestrator:
                 record.ingest or "no issue changes",
                 " | %d file(s) written" % len(patch_log) if patch_log else "",
                 " | %d call(s) refused" % len(refused) if refused else "",
-                " | gate %s" % ("PASS" if gate.ok else "TIMED OUT" if gate.timed_out else "FAIL")
+                " | gate %s" % ("PASS on a re-run, possibly flaky" if gate.ok and gate.flaky
+                                else "PASS" if gate.ok else "TIMED OUT" if gate.timed_out
+                                else "FAIL")
                 if self.workspace.gate else "",
             )
         )
@@ -967,7 +1004,8 @@ class Orchestrator:
             if record.patch_log:
                 lines.append("**Files written:** " + "; ".join(record.patch_log))
             if record.gate and not record.gate.skipped:
-                lines.append("**Gate:** %s" % ("passed" if record.gate.ok else "FAILED"))
+                lines.append("**Gate:** %s" % (record.gate.flaky if record.gate.ok and record.gate.flaky
+                                               else "passed" if record.gate.ok else "FAILED"))
             lines.append("**Workspace:** `%s`" % record.digest[:8])
             lines.append("")
         return "\n".join(lines)

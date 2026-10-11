@@ -174,8 +174,13 @@ def shell(request):
 
 
 def _run(env, shell="/bin/sh"):
+    # A new session has no controlling terminal. stdin from /dev/null is not
+    # enough: install.sh reopens /dev/tty when there is one, so run from a
+    # terminal (as duet runs its gate) these tests saw a human to ask and took
+    # the interactive path they were written to rule out.
     return subprocess.run([shell, str(INSTALL)], capture_output=True, text=True,
-                          env=env, cwd=str(env["HOME"]), timeout=120, stdin=subprocess.DEVNULL)
+                          env=env, cwd=str(env["HOME"]), timeout=120, stdin=subprocess.DEVNULL,
+                          start_new_session=True)
 
 
 def test_install_sh_reaches_a_working_duet_through_the_venv_fallback(tmp_path, shell):

@@ -13,6 +13,22 @@
   run during the session. `--fresh-gate` on every session command and on
   `duet resume` ignores the cache; `duet verify` always runs the gate fresh. A
   corrupt or unreadable cache file is ignored.
+- Fixed: new files could vanish from what the reviewer is shown. The view was
+  `git diff HEAD` (which never contains an untracked file) with a list of new file
+  names after it, trimmed at 12,000 characters — so in a change whose main code is
+  new files the list was the first thing cut. Every new file is now named first,
+  with its size; the diff and the new files' text then share the rest of the budget
+  fairly; binary and very large files are listed, not inlined; and when anything is
+  trimmed, the view says exactly which files were not shown in full. Nothing is
+  staged.
+- Fixed: one bad gate run blocked a session until someone edited a file. A failure
+  (or time-out) on files that a whole turn then left unchanged is re-run once before
+  it is believed. A pass on the re-run is used and reported to the user and both
+  agents as "the gate failed once and passed on a re-run with no file changes —
+  possibly flaky: <failing tests>"; a failure that repeats stays a failure.
+- Tests: the install.sh tests that assume no terminal now run the installer in a
+  new session. Redirecting stdin was not enough — the installer reopens
+  `/dev/tty` — so run from a terminal they took the interactive path and failed.
 
 ## 0.8.0
 
