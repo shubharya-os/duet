@@ -10,11 +10,17 @@ each workflow is held to. Use the `duet` skill, or run it directly:
 
 | the user wants to… | run | the rule the harness checks |
 |---|---|---|
-| fix a bug | `{{DUET}} fix "<the bug>"` | the tests must fail on the original code |
-| add a feature | `{{DUET}} add "<the feature>"` | a test must fail without the feature |
-| restructure without changing behaviour | `{{DUET}} refactor "<what>"` | existing tests may not change |
-| build something new in an empty directory | `{{DUET}} build "<the idea>"` | the gate is red before any code exists |
-| decide how to approach a large change | `{{DUET}} plan "<the goal>"` | only PLAN.md may change |
+| fix a bug | `{{DUET}} fix "<the bug>" --detach` | the tests must fail on the original code |
+| add a feature | `{{DUET}} add "<the feature>" --detach` | a test must fail without the feature |
+| restructure without changing behaviour | `{{DUET}} refactor "<what>" --detach` | existing tests may not change |
+| build something new in an empty directory | `{{DUET}} build "<the idea>" --detach` | the gate is red before any code exists |
+| decide how to approach a large change | `{{DUET}} plan "<the goal>" --detach` | only PLAN.md may change |
+
+Always add `--detach`: a session runs for many minutes, and the shell you just ran that
+command in — your own tool shell — can be torn down (a cancelled turn, a closed terminal)
+long before the two agents finish, which otherwise kills the session with it and leaves
+no record of why. `--detach` returns at once with a session id and a log path; check on
+it with `{{DUET}} status` rather than waiting on the command.
 
 **Do it directly, without duet,** for: questions and explanations; reading or exploring
 code; one-line and mechanical edits (typos, renames, formatting, config values); any

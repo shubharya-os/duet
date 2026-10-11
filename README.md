@@ -706,7 +706,8 @@ duet sessions        # every session in this workspace
 
 Useful flags for `run`: `--gate` (your tests — the most valuable one), `--pair`,
 `--rounds`, `--turn-timeout MINUTES`, `--gate-timeout MINUTES`, `--fresh-gate`, `--accept "what done means"`, `--swap N` to
-trade places, `--commit`, `--json`.
+trade places, `--commit`, `--json`, `--detach` (run it as its own process and
+return at once — see "Surviving the thing that launched it" below).
 
 ### The clock, and the network
 
@@ -769,6 +770,45 @@ not exist. The gate is checked again before the first new turn, because the
 workspace can have changed while the session was dead — from the gate cache when
 the files and the command are exactly those of a pass in the last day, otherwise
 by running it (`--fresh-gate` to always run it).
+
+### Surviving the thing that launched it
+
+A session usually gets started from a shell that does not outlive it: an agent's
+own tool shell, a terminal someone closes. That shell's death used to take duet
+down with it — no `session_end`, no reason, nothing to resume from. duet now
+catches SIGTERM, SIGHUP and SIGINT: it stops the running agent or gate cleanly,
+saves the session, and writes a `session_end` with status `"interrupted"` and a
+reason naming what was running ("stopped by SIGTERM during claude's turn in round
+3"), plus the exact command to continue — `duet resume <id>` — printed in the
+report too. A second signal during that shutdown exits at once rather than
+waiting on it. (SIGKILL cannot be caught by anything; that is what `duet status`
+below is for.)
+
+`--detach` is the other half: it runs the session as its own process, detached
+from the shell that started it, so that shell dying afterwards cannot touch it.
+It writes the session's output to its log file and returns immediately with the
+session id and how to follow it:
+
+```bash
+duet fix "slugify keeps punctuation" --detach
+#   session: 20261011-120000-9f3a
+#   log:     .duet/sessions/20261011-120000-9f3a.log
+#   follow it:   tail -f .duet/sessions/20261011-120000-9f3a.log
+#   check on it: duet status 20261011-120000-9f3a
+
+duet status 20261011-120000-9f3a
+```
+
+Add it to any session-starting command — `run`, `build`, `fix`, `add`,
+`refactor`, `plan`, `resume` — including from inside the `/duet` skill, which is
+exactly where this bites: the agent's own tool call is the shell that was about
+to die with the session in it. Not supported on Windows.
+
+`duet status` with no session id lists the recent ones in this workspace and
+calls out a dead one — no `session_end`, no process still running for it, and
+silent for longer than its turn and gate limits allow — as "stopped without
+finishing (process gone)", with what it was doing and the `duet resume` command,
+instead of reporting it as running forever.
 
 ---
 

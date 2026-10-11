@@ -371,17 +371,23 @@ def test_status_reports_a_session_while_it_is_still_running(tmp_path, capsys):
 
     from duet.cli import main
 
+    import os as _os
+    import time as _time
+
     session = tmp_path / ".duet" / "sessions" / "20260101-000000-aaaa"
     session.mkdir(parents=True)
+    # Recent, and from a live process: a log whose last word was decades ago
+    # is a session that died, and status now says so.
+    t0 = _time.time() - 60
     events = [
-        {"kind": "session_start", "t": 1, "task": "build the thing", "max_rounds": 10,
-         "agents": {"claude": "Claude Code", "chatgpt": "ChatGPT"}},
-        {"kind": "turn_done", "t": 2, "round": 1, "agent": "claude", "verdict": "CONTINUE",
+        {"kind": "session_start", "t": t0 + 1, "task": "build the thing", "max_rounds": 10,
+         "pid": _os.getpid(), "agents": {"claude": "Claude Code", "chatgpt": "ChatGPT"}},
+        {"kind": "turn_done", "t": t0 + 2, "round": 1, "agent": "claude", "verdict": "CONTINUE",
          "message": "first pass done", "issues": [], "resolves": [], "gate_ok": True},
-        {"kind": "turn_done", "t": 3, "round": 2, "agent": "chatgpt", "verdict": "CONTINUE",
+        {"kind": "turn_done", "t": t0 + 3, "round": 2, "agent": "chatgpt", "verdict": "CONTINUE",
          "message": "this is wrong", "issues": ["missing-timeout"], "resolves": [],
          "gate_ok": True},
-        {"kind": "turn_start", "t": 4, "round": 3, "agent": "claude"},
+        {"kind": "turn_start", "t": t0 + 4, "round": 3, "agent": "claude"},
     ]
     session.joinpath("events.jsonl").write_text(
         "\n".join(_json.dumps(e) for e in events) + "\n")

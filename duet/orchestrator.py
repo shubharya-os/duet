@@ -9,6 +9,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
+import signal
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -59,6 +62,47 @@ _WRITING_COMMAND = re.compile(
 RETRY_BASE_DELAY = 8
 RETRY_MAX_DELAY = 120
 RETRY_ATTEMPTS = 5
+
+# The signals that stop a session the way a closed terminal, a killed tool
+# shell or a quitting app does. Each one ends the session on the record —
+# interrupted, with what was running and how to resume — instead of mid-write
+# with nothing in the log. SIGKILL cannot be caught; `duet status` is what
+# notices those.
+STOP_SIGNALS = tuple(name for name in ("SIGTERM", "SIGHUP", "SIGINT") if hasattr(signal, name))
+
+
+class SessionStopped(KeyboardInterrupt):
+    """A stop signal arrived while the session was running.
+
+    A KeyboardInterrupt on purpose: `subprocess.run` kills its child on the way
+    out of any exception, so raising this from the handler stops the agent CLI
+    mid-turn, and every place that already treats Ctrl-C as "stop and save"
+    treats a SIGTERM the same way.
+    """
+
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
+
+    @property
+    def name(self) -> str:
+        try:
+            return signal.Signals(self.signum).name
+        except ValueError:
+            return "signal %d" % self.signum
+
+
+def resume_command(session_id: str, root: str) -> str:
+    """The exact command that carries an interrupted session on."""
+    command = "duet resume %s" % session_id
+    try:
+        here: Optional[Path] = Path.cwd().resolve()
+    except OSError:
+        here = None
+    if here != Path(root).resolve():
+        command += " -C %s" % shlex.quote(str(Path(root).resolve()))
+    return command
+
 
 # Indirected so the test suite can run the retry path without sleeping through
 # it; the schedule itself is a pure function, tested as one.
@@ -156,7 +200,14 @@ class Orchestrator:
         self.state = DebateState(
             config.agent_names, max_debate=config.max_debate, stall_limit=config.stall_limit
         )
-        self.session_id = session_id or time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
+        # --detach picks the id before this process exists (so it can print it
+        # and return at once) and hands it down this way, since the re-exec'd
+        # child is the one that actually constructs the Orchestrator. Popped,
+        # not read: the gate and the agents inherit this environment, and a
+        # gate that builds sessions of its own must not get this one's id.
+        forced = os.environ.pop("DUET_FORCE_SESSION_ID", None)
+        self.session_id = (session_id or forced
+                           or time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4])
         self.session_dir = Path(config.root).resolve() / ".duet" / "sessions" / self.session_id
         self.turns: List[TurnRecord] = []
         self.history: List[str] = []
@@ -207,10 +258,23 @@ class Orchestrator:
         # and one line on what the panel last decided, for the report.
         self.jury_adapter: Optional[Callable[[str], Adapter]] = None
         self.jury_note = ""
+        # What the session is doing right now, in words, for the reason a
+        # stopped session gives: "during claude's turn in round 3".
+        self.doing = "while starting up"
+        self._round = 0
+        # Set by the first stop signal; a second one during the shutdown that
+        # follows exits at once rather than waiting on it.
+        self._stopping = 0
 
     # -- plumbing ---------------------------------------------------------
     def emit(self, kind: str, **payload: Any) -> None:
         event = dict(kind=kind, t=time.time(), **payload)
+        if kind == "turn_start":
+            self.doing = "during %s's turn in round %s" % (payload.get("agent"), payload.get("round"))
+        elif kind == "gate_start":
+            self.doing = "while the gate was running" + (" in round %d" % self._round if self._round else "")
+        elif kind in ("turn_done", "gate_done", "gate_remembered"):
+            self.doing = ("between turns in round %d" % self._round) if self._round else "while starting up"
         self.reporter(event)
         try:
             self.session_dir.mkdir(parents=True, exist_ok=True)
@@ -763,29 +827,84 @@ class Orchestrator:
             turn_timeout={name: self.turn_budget(name) for name in cfg.agent_names},
             resumed_from=self.resumed_from or None,
             start_round=self.start_round,
+            # For `duet status`: whether the process behind this log is still
+            # alive, and how long a silence its limits allow.
+            pid=os.getpid(),
+            gate_timeout=cfg.gate_timeout,
         )
+        previous = self._install_stop_handlers()
+        try:
+            return self._run_rounds(order)
+        finally:
+            self._restore_handlers(previous)
 
-        if self.workflow:
-            # Before the first gate runs: the baseline is the workspace as the
-            # pair found it. setdefault inside begin() keeps a resumed session's
-            # original baseline rather than retaking it from wherever it died.
-            # The gate goes in too — a replay against the baseline runs it.
-            cfg.workflow_state.setdefault("gate", cfg.gate)
-            # Not setdefault: `duet resume --gate-timeout` raises it for the
-            # replay as well as for the gate.
-            cfg.workflow_state["gate_timeout"] = cfg.gate_timeout
-            self.workflow.begin(cfg.root, cfg.workflow_state)
+    def _install_stop_handlers(self) -> Dict[int, Any]:
+        """Catch the signals that kill a session from outside; return the old handlers.
 
+        A signal someone already chose to ignore stays ignored: `nohup` sets
+        SIGHUP to SIG_IGN precisely so a closed terminal does not stop the run.
+        Only the main thread may install handlers, so elsewhere this is a no-op.
+        """
+        previous: Dict[int, Any] = {}
+        if threading.current_thread() is not threading.main_thread():
+            return previous
+        for name in STOP_SIGNALS:
+            signum = getattr(signal, name)
+            try:
+                if signal.getsignal(signum) == signal.SIG_IGN:
+                    continue
+                previous[signum] = signal.signal(signum, self._on_stop_signal)
+            except (ValueError, OSError):
+                continue
+        return previous
+
+    @staticmethod
+    def _restore_handlers(previous: Dict[int, Any]) -> None:
+        for signum, handler in previous.items():
+            try:
+                signal.signal(signum, handler if handler is not None else signal.SIG_DFL)
+            except (ValueError, OSError):
+                pass
+
+    def _on_stop_signal(self, signum: int, frame: Any) -> None:
+        if self._stopping:
+            # A second signal while the first one's shutdown is still saving:
+            # whoever sent it wants the process gone now, not in a moment.
+            os._exit(128 + signum)
+        self._stopping = signum
+        raise SessionStopped(signum)
+
+    def _stopped_reason(self, exc: BaseException) -> str:
+        how = ("stopped by %s" % exc.name) if isinstance(exc, SessionStopped) else "interrupted by the user"
+        if isinstance(exc, SessionStopped):
+            self.emit("session_stopping", signal=exc.name, doing=self.doing)
+        return "%s %s — continue with: %s" % (how, self.doing,
+                                               resume_command(self.session_id, self.config.root))
+
+    def _run_rounds(self, order: List[str]) -> SessionResult:
+        cfg = self.config
         status, reason = STATUS_EXHAUSTED, "reached the %d-round limit" % cfg.max_rounds
         round_no = self.start_round - 1
         errors: Dict[str, int] = {name: 0 for name in cfg.agent_names}
         agent = directive = ""
 
         try:
+            if self.workflow:
+                # Before the first gate runs: the baseline is the workspace as the
+                # pair found it. setdefault inside begin() keeps a resumed session's
+                # original baseline rather than retaking it from wherever it died.
+                # The gate goes in too — a replay against the baseline runs it.
+                cfg.workflow_state.setdefault("gate", cfg.gate)
+                # Not setdefault: `duet resume --gate-timeout` raises it for the
+                # replay as well as for the gate.
+                cfg.workflow_state["gate_timeout"] = cfg.gate_timeout
+                self.workflow.begin(cfg.root, cfg.workflow_state)
+
             # A while loop, not a range: a turn that never reached the model has
             # to be able to give its round back, and `range` cannot be rewound.
             while round_no < cfg.max_rounds:
                 round_no += 1
+                self._round = round_no
                 agent = order[(round_no - 1) % len(order)]
                 peer = self.state.peer_of(agent)
                 digest = self.workspace.digest()
@@ -869,8 +988,8 @@ class Orchestrator:
                     self.pending_directive[agent] = stall
                     self.pending_directive[peer] = stall
                     self.state.stall_rounds = 0
-        except KeyboardInterrupt:
-            status, reason = STATUS_INTERRUPTED, "interrupted by the user"
+        except KeyboardInterrupt as exc:
+            status, reason = STATUS_INTERRUPTED, self._stopped_reason(exc)
             # The turn never happened, so give back the directive that was
             # popped for it — otherwise a stall nudge or an "envelope missing"
             # correction is lost across the resume.
@@ -891,7 +1010,17 @@ class Orchestrator:
                                                                       last.agent, order[0]))
 
         digest = self.workspace.digest()
-        gate = self.gate_for(digest)
+        gate: Optional[GateResult]
+        if status == STATUS_INTERRUPTED:
+            # Whoever stopped it wants it stopped: never start a gate that can
+            # take a quarter of an hour on the way out. Show one only if this
+            # exact state was already checked.
+            gate = self._gate_cache.get(digest)
+        else:
+            try:
+                gate = self.gate_for(digest)
+            except KeyboardInterrupt as exc:
+                status, reason, gate = STATUS_INTERRUPTED, self._stopped_reason(exc), None
         result = SessionResult(
             status=status,
             rounds=round_no,
@@ -905,7 +1034,11 @@ class Orchestrator:
         self._save(result)
         if status == STATUS_CONSENSUS and cfg.commit:
             self.commit(result)
-        self.emit("session_end", status=status, reason=reason, rounds=round_no, digest=digest, report=result.report)
+        end: Dict[str, Any] = dict(status=status, reason=reason, rounds=round_no, digest=digest,
+                                   report=result.report)
+        if status == STATUS_INTERRUPTED:
+            end["resume"] = resume_command(self.session_id, cfg.root)
+        self.emit("session_end", **end)
         return result
 
     # -- persistence ------------------------------------------------------
@@ -1034,6 +1167,10 @@ class Orchestrator:
             lines += ["- %s" % r for r in reasons] or ["- nothing recorded"]
             if open_issues:
                 lines.append("")
+        if result.status == STATUS_INTERRUPTED:
+            lines += ["", "## To continue", "",
+                      "The argument so far is saved. Pick it up at the next round with:", "",
+                      "    " + resume_command(self.session_id, self.config.root)]
         lines += ["", "## Timeline", "", "```", "\n".join(self.history) or "(no turns)", "```", ""]
         path = self.session_dir / "report.md"
         try:

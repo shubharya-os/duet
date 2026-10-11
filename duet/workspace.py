@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shlex
+import signal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -384,22 +385,29 @@ class Workspace:
             return GateResult(command="", ok=True, exit_code=0, output="", skipped=True)
         started = time.monotonic()
         try:
-            proc = subprocess.run(
+            # Its own process group, so stopping the gate stops the test runner
+            # under the shell too — killing only the shell left it running on.
+            proc = subprocess.Popen(
                 self.gate,
                 cwd=str(self.root),
                 shell=True,
-                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=self.gate_timeout,
                 env={**os.environ, "DUET_GATE": "1"},
+                start_new_session=os.name == "posix",
             )
-        except subprocess.TimeoutExpired as exc:
+        except OSError as exc:
+            return GateResult(command=self.gate, ok=False, exit_code=127, output=str(exc))
+        try:
+            stdout, stderr = proc.communicate(timeout=self.gate_timeout)
+        except subprocess.TimeoutExpired:
+            stop_process_group(proc)
+            stdout, stderr = proc.communicate()
             # Keep what it printed before it was stopped: how far the run got
             # is the first thing anyone deciding on a longer limit wants to see.
-            partial = "".join(
-                part.decode("utf-8", "replace") if isinstance(part, bytes) else part
-                for part in (exc.stdout, exc.stderr) if part
-            )
+            partial = (stdout or "") + (stderr or "")
             return GateResult(
                 command=self.gate,
                 ok=False,
@@ -408,9 +416,12 @@ class Workspace:
                 timed_out=True,
                 timeout=self.gate_timeout,
             )
-        except OSError as exc:
-            return GateResult(command=self.gate, ok=False, exit_code=127, output=str(exc))
-        output = (proc.stdout or "") + (proc.stderr or "")
+        except BaseException:
+            # A stop signal (duet's handler raises) or Ctrl-C: the gate goes
+            # down with the session instead of outliving it.
+            stop_process_group(proc)
+            raise
+        output = (stdout or "") + (stderr or "")
         return GateResult(
             command=self.gate,
             ok=proc.returncode == 0,
@@ -418,6 +429,43 @@ class Workspace:
             output=output,
             duration=time.monotonic() - started,
         )
+
+
+def stop_process_group(proc: "subprocess.Popen[str]", grace: float = 3.0) -> None:
+    """Stop a child started in its own session, and everything it started.
+
+    SIGTERM to the group first so a test runner can clean up, SIGKILL if it is
+    still there after `grace` seconds. Where the group cannot be signalled
+    (Windows, or a sandbox that refuses killpg) the child alone is stopped.
+    """
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGTERM)
+        else:
+            proc.terminate()
+    except OSError:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except OSError:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def changed_paths(before: Dict[str, str], after: Dict[str, str]) -> List[str]:
