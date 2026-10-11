@@ -59,22 +59,43 @@ def skill_dir() -> Path:
     return Path(__file__).resolve().parent / "skill"
 
 
+ROUTING = "{{ROUTING}}"
+# Who `/duet review` asks, by host: in Codex the other model is Claude; in
+# Claude Code `duet review` already picks whoever does not normally lead.
+REVIEWER = {"codex-skill.md": " --reviewer claude", "codex-prompt.md": " --reviewer claude"}
+
+
+def skill_template(filename: str, prelude: str = "") -> str:
+    """A packaged skill or command source with its argument handling spliced in.
+
+    Claude Code lets the skill answer `/duet` as well as the command, so
+    `/duet running` and `/duet review` must be handled the same by every file
+    that can receive them. That handling lives once, in routing.md, and every
+    source carries a `{{ROUTING}}` marker where it goes. `{{DUET}}` is left in
+    for the caller to fill.
+    """
+    text = (skill_dir() / filename).read_text(encoding="utf-8")
+    if ROUTING not in text:
+        return text
+    routing = (skill_dir() / "routing.md").read_text(encoding="utf-8")
+    routing = routing.replace("{{REVIEWER}}", REVIEWER.get(filename, ""))
+    return text.replace(ROUTING, prelude + routing, 1)
+
+
 def _command() -> str:
-    text = (skill_dir() / "claude-command.md").read_text(encoding="utf-8").replace("{{DUET}}", "duet")
+    text = skill_template("claude-command.md", PRELUDE).replace("{{DUET}}", "duet")
     _, _, rest = text.partition("---\n")
     front, _, body = rest.partition("---\n")
     # `command -v` is read-only, so it needs no prompt; the install line is
     # left out on purpose, so Claude Code asks the user before it runs.
     front = front.replace("allowed-tools: ", "allowed-tools: Bash(command -v duet), ", 1)
     front = front.replace("Bash(duet:*), Bash(duet:*)", "Bash(duet:*)")   # both placeholders became `duet`
-    marker = "The user typed `/duet $ARGUMENTS`.\n\n"
-    assert marker in body, "claude-command.md no longer opens the way the prelude expects"
-    body = body.replace(marker, marker + PRELUDE, 1)
     return "---\n" + front + "---\n" + body
 
 
 def _skill() -> str:
-    return (skill_dir() / "SKILL.md").read_text(encoding="utf-8").replace("{{DUET}}", "duet")
+    # The skill answers `/duet` too, so it checks for the CLI the same way.
+    return skill_template("SKILL.md", PRELUDE).replace("{{DUET}}", "duet")
 
 
 def _plugin_json() -> str:

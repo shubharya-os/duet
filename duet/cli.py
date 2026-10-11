@@ -25,6 +25,7 @@ from duet import workflow_commands
 from duet import from_ecc
 from duet import jury
 from duet import make as make_cmd
+from duet.plugin_files import skill_template
 from duet.config import (
     BACKEND_ALIASES,
     DEFAULT_GATE_TIMEOUT,
@@ -994,7 +995,7 @@ def _command_body(invocation: str) -> tuple:
     Other harnesses get the same instructions rather than a copy that drifts:
     only the argument placeholder and the metadata around it differ.
     """
-    text = (skill_dir() / "claude-command.md").read_text(encoding="utf-8").replace("{{DUET}}", invocation)
+    text = skill_template("claude-command.md").replace("{{DUET}}", invocation)
     _, _, rest = text.partition("---\n")
     front, _, body = rest.partition("---\n")
     description = ""
@@ -1075,7 +1076,7 @@ def cmd_skill(args: argparse.Namespace) -> int:
     if args.action == "show":
         for label, filename, _, _ in SKILL_TARGETS:
             print(ui.bold("--- %s (%s) ---" % (label, filename)))
-            print((source_dir / filename).read_text(encoding="utf-8").replace("{{DUET}}", invocation))
+            print(skill_template(filename).replace("{{DUET}}", invocation))
         return 0
 
     installed, skipped, failed = [], [], []
@@ -1091,7 +1092,7 @@ def cmd_skill(args: argparse.Namespace) -> int:
         if not source.is_file():
             failed.append((label, target, "packaged file missing: %s" % source))
             continue
-        template = source.read_text(encoding="utf-8")
+        template = skill_template(filename)
         body = template.replace("{{DUET}}", invocation)
         if target.is_file():
             current = target.read_text(encoding="utf-8", errors="replace")

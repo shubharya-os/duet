@@ -5,7 +5,9 @@ description: Hand a task to Claude Code and ChatGPT together, so they build it a
 
 # duet — a second model in the loop
 
-You are Claude Code. `duet` lets you bring ChatGPT in: either for a one-shot review of
+The user typed `/duet` with an argument, or asked for duet in their own words.
+
+{{ROUTING}}You are Claude Code. `duet` lets you bring ChatGPT in: either for a one-shot review of
 what you just did, or for a full build where the two of you take turns until you both
 sign off.
 

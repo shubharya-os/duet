@@ -27,9 +27,9 @@ Nothing else. Do not start a new session.
 
 ## If the argument is `review`
 
-Run `duet review`. Report the findings and say
-which ones you agree with. You are allowed to disagree with the reviewer — say so and
-why. Do not silently act on a finding you think is wrong.
+Run `duet review` to have the other model review the current diff. Report the
+findings and say which ones you agree with. You are allowed to disagree with the reviewer —
+say so and why. Do not silently act on a finding you think is wrong.
 
 ## Otherwise — hand the work over
 

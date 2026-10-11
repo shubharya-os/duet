@@ -271,10 +271,10 @@ def test_every_installed_file_declares_itself_to_its_host():
 def test_the_slash_commands_carry_the_thread_across():
     """The whole point of /duet over a bare shell call: the user should not have
     to re-explain what they just spent ten messages explaining."""
-    from duet.cli import skill_dir
+    from duet.plugin_files import skill_template
 
     for filename in ("claude-command.md", "codex-prompt.md"):
-        text = (skill_dir() / filename).read_text()
+        text = skill_template(filename)
         assert "--context-file" in text, filename
         assert "--gate" in text, filename
         assert "running" in text, filename          # /duet running is documented

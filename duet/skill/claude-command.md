@@ -6,21 +6,7 @@ allowed-tools: Bash({{DUET}}:*), Bash(duet:*), Bash(git:*), Bash(ls:*), Bash(cat
 
 The user typed `/duet $ARGUMENTS`.
 
-## If the argument is `running` or `status`
-
-Run `{{DUET}} status` and report it in one short paragraph: is it still going, which round,
-who it is waiting on, what they are arguing about, and whether the gate is passing.
-Nothing else. Do not start a new session.
-
-## If the argument is `review`
-
-Run `duet review`. Report the findings and say
-which ones you agree with. You are allowed to disagree with the reviewer — say so and
-why. Do not silently act on a finding you think is wrong.
-
-## Otherwise — hand the work over
-
-The user is mid-conversation with you. They should not have to re-explain any of it, and
+{{ROUTING}}The user is mid-conversation with you. They should not have to re-explain any of it, and
 they should not lose the thread. So:
 
 **1. Write down what you already know.** Create a scratch file (`/tmp/duet-context.md`)
