@@ -278,6 +278,14 @@ class CodexCliAdapter(Adapter):
         self.sandbox = "read-only"
         return "sandbox read-only"
 
+    WEB_SEARCH = ["-c", "tools.web_search=true"]
+
+    def allow_web(self) -> str:
+        """Turn on Codex's web search for this adapter's runs only."""
+        if self.WEB_SEARCH[1] not in self.extra_args:
+            self.extra_args += self.WEB_SEARCH
+        return "web search on (%s)" % " ".join(self.WEB_SEARCH)
+
     def _base(self, last_message_file: str) -> List[str]:
         # --color never keeps ANSI escapes out of anything we parse; -o gives us
         # the agent's final message verbatim instead of scraped from the log.

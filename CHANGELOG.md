@@ -20,6 +20,17 @@
   out while Chrome is still running now gets one retry with a longer
   allowance before it counts as a setup fault; a Chrome that never starts (or
   dies) still fails at once with exit 3.
+- Added: `duet make "<what to build>" [--like URL_OR_APP ...]` — recon, plan, build,
+  parity and a clean-room sweep, run in order or one at a time with `--stage`, each
+  reading what the previous wrote under `make/`. Recon is the only pass given web
+  tools (Claude Code's WebSearch/WebFetch, Codex's web search); every features.csv row
+  needs a public http(s) source or it does not count. The plan workflow refuses a
+  PLAN.md that misses a must-have. Parity is scored by the harness (must 3, should 2,
+  could 1; done 1, partial 0.5), a done row without a test or file that exists counts
+  as todo, and any must-have not done exits 1. The sweep finds the references' names,
+  domains and colours in contents, identifiers and file names, and a build session run
+  by `duet make` cannot reach consensus while it is dirty. Inspired by replica-skill
+  (MIT, Copyright (c) 2026 Jake Schincariol).
 - Added: gate passes are remembered across sessions. Every session and every
   `duet resume` used to run the whole gate before round 1, even over files that had
   just passed that same gate — 5 to 15 minutes on a loaded machine before an agent

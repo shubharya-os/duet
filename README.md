@@ -322,6 +322,60 @@ It is a simulated panel — models playing stakeholders. It finds gaps worth clo
 not market evidence, and it does not replace putting the thing in front of real people;
 every report says so.
 
+### Build from references: `duet make`
+
+```
+duet make "a shared reading list for book clubs" --like https://bookly.example --like "Page Turner"
+duet make "a shared reading list for book clubs"          # no references: research what exists
+duet make --stage parity                                   # one stage, from what make/ already holds
+```
+
+From an idea — with reference apps if you have them — `duet make` runs five stages in
+order, each reading what the one before wrote under `make/`. `--stage recon|plan|build|parity|sweep`
+runs one on its own.
+
+1. **recon** — one read-only research pass, and the only pass in duet given web search
+   and fetch. With `--like` it reverse-engineers each reference from public pages (its
+   site, help centre, pricing page, store listing, public walkthroughs) into
+   `make/recon.md` — screens, flows, components, an inferred data model — and
+   `make/features.csv`. Without `--like` it researches what already exists for the idea:
+   the alternatives, what they lack, what users need. The harness writes the files, and
+   checks every row: `feature, area, priority (must|should|could), source, status
+   (todo|done|partial|skip), evidence, notes`. A row whose source is not a public http(s)
+   URL — none, a private address, credentials in it — is reported and does not count.
+2. **plan** — `duet plan`, with recon.md and features.csv as context. The plan workflow's
+   own check refuses a PLAN.md that does not name every must-have.
+3. **build** — `duet build`, or `duet add` when the workspace already has code, with
+   acceptance criteria generated from the must-haves. A website gets `duet page check` as
+   its gate, as it would anyway.
+4. **parity** — scored by the harness, not reported by the agents: must 3, should 2,
+   could 1; done 1, partial 0.5, todo 0. A `done` row counts only when its evidence is a
+   test name or a file path that exists in the workspace (`test_shared_shelf`,
+   `tests/test_shelf.py::test_shared_shelf`, `src/shelf.py`); otherwise it is a todo.
+   `skip` with a reason in notes, and features the references do not have (notes
+   starting `extra:`), are listed separately and left out of the score. Writes
+   `make/parity.md`; exit 1 while any must-have is not done.
+5. **sweep** — the clean room. The references' names, domains and brand colours (from
+   `--like`, and `make/brand.json`: `{"avoid": [...], "domains": [...], "colors": [...]}`,
+   which recon fills in and `--like` is remembered in) must not appear anywhere in the
+   product: contents, identifiers (`booklyShelf`, `get_bookly_id`), file names,
+   case-insensitively, colours in short hex form too (`#f36` for `#ff3366`). `.git`,
+   `node_modules`, build output, lock files, binaries and `make/` are skipped. Exit 1
+   while anything is found — and while `duet make` runs a build session, the pair's
+   consensus is refused while the sweep is dirty, the way a workflow's rule is.
+
+The references' users' complaints are `duet jury`'s job; `duet make` points to it at the
+end rather than duplicating it.
+
+**The fine print.** `duet make` rebuilds what an app does, never what it owns: features
+and flows, clean-room. Never source code, logos, trademarks, copy, content or private
+APIs. Public sources and your own account only — never behind someone else's login, a
+paywall, or against a site's terms. Rebrand before launch. This is not legal advice.
+
+Inspired by [replica-skill](https://github.com/Jakeschincariol/replica-skill) by Jake
+Schincariol (MIT License); the code adapted from it carries its copyright and licence
+notice.
+
 ### `duet build` — start from nothing, with a gate from round one
 
 An empty directory is where duet's own mechanism used to lapse: there are no tests, so
@@ -700,6 +754,7 @@ duet plan "goal"     # argue out PLAN.md; no code may change
 duet page check ...  # the gate a website can have: render it, print every fault
 duet page shot ...   # one full-page PNG per width, so both agents can look
 duet jury            # a simulated stakeholder panel; every objection checked
+duet make "idea" --like URL   # recon, plan, build, parity, clean-room sweep
 duet resume          # carry on a session that died, keeping the argument
 duet status          # what is the session doing right now (works mid-run)
 duet verify          # does the last sign-off still hold? re-runs the gate

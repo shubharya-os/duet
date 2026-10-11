@@ -36,6 +36,12 @@ class MockAdapter(Adapter):
         self.turns = 0
         self.prompts: List[str] = []
         self.systems: List[str] = []
+        self.web = False
+
+    def allow_web(self) -> str:
+        # Recorded, so a test can see which passes were given the web.
+        self.web = True
+        return "web tools allowed (mock)"
 
     def send(self, prompt: str, system: str = "", round_no: int = 0) -> AgentReply:
         self.prompts.append(prompt)
