@@ -332,6 +332,10 @@ def test_a_stage_without_its_input_refuses(tmp_path, sessions):
 
 
 def test_plan_stage_hands_the_must_haves_to_the_plan_veto(tmp_path, sessions):
+    # Mocks for both agents, as every other stage test pins: without them the
+    # pre-start check looks for a real, signed-in claude and codex, which this
+    # machine may have and CI does not.
+    pin_mocks(tmp_path, RECON_REPLY)
     write_ledger(tmp_path, csv_of(("shared shelf", "a", "must", SOURCE, "todo", "", "")))
     (tmp_path / "make" / "recon.md").write_text("# Recon\n")
     assert main(["make", "a reading list", "--stage", "plan", "-C", str(tmp_path)]) == 0
