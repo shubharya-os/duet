@@ -725,6 +725,24 @@ Four conditions. All enforced by the harness. None negotiable by an agent.
 4. **Your tests pass**, run by the harness on the real files. Neither agent is ever
    *asked* whether they passed.
 
+### Once one has signed, the other agrees without editing
+
+Condition 2 cuts both ways: any edit after a DONE voids it, so a pair that keeps
+"just tidying" while it agrees never lands both signatures on the same files. Once
+an agent's peer has voted DONE on the current workspace, its prompt says so and
+sets the rule:
+
+- **Agree** by voting DONE without changing any file. That ends the session.
+- **Change files only to fix something you would block on** — raised as a blocker
+  or major issue, with the fix, and the session goes on as before.
+- **Anything nicer-to-have is a minor issue, not an edit.** Minor issues never
+  block, and any still open at the end are listed in the report under
+  *Left for later*.
+
+If an agent votes DONE with an edit anyway, the harness says so on screen and in
+both agents' next prompts — the agreement restarted, and here are the files that
+changed — so the peer re-checks only that.
+
 ### Objections belong to whoever raised them
 
 ```

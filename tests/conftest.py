@@ -1,10 +1,35 @@
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+_OWN_BASETEMP = ""
+
+
+def pytest_configure(config):
+    """Each run gets a temp root of its own.
+
+    By default every pytest run by this user shares one root and numbers its
+    directories there, pruning older ones as it goes. This suite is run by
+    several duet sessions at once on one machine, and under that contention the
+    runs collide in it: a whole stretch of tests errored at setup with "could not
+    create numbered dir", which read as a red gate on code nobody had broken. An
+    explicit --basetemp is left alone.
+    """
+    global _OWN_BASETEMP
+    if config.option.basetemp is None:
+        _OWN_BASETEMP = tempfile.mkdtemp(prefix="duet-tests-")
+        config.option.basetemp = _OWN_BASETEMP
+
+
+def pytest_unconfigure(config):
+    if _OWN_BASETEMP:
+        shutil.rmtree(_OWN_BASETEMP, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)

@@ -5,6 +5,22 @@
 - Fixed: `/duet running` from the skill waited on a permission prompt before it could
   run `duet status`, because the skill, unlike the command, did not pre-approve
   running duet. The skill now carries the same allowed tools.
+- Fixed: agents who agreed kept a session from ending. Measured over 139 real
+  sessions, a quarter of the turns in the ones that agreed came after the first
+  DONE, and some sessions with green gates, no open issues and ten DONE votes
+  still ran out of rounds — because each DONE came with a small edit, so the two
+  signatures were never on the same files. Now:
+  - once the peer has voted DONE on the current workspace, the agent's prompt says
+    so plainly and sets the rule: agree by voting DONE without changing any file;
+    change files only to fix something you would block on, raised as a blocker or
+    major issue; anything nicer-to-have goes in as a minor issue, not an edit.
+  - when an agent votes DONE and changes files after its peer's DONE anyway, both
+    agents are told in their next prompt that the edit restarted the agreement and
+    which files it changed, so the peer re-checks only those. The terminal shows it
+    too, the timeline records it, and the event log has an `agreement_restarted`
+    event. It survives `duet resume`.
+  - minor issues still do not block consensus, and those still open at the end are
+    listed in the session report under "Left for later".
 
 ## 0.10.0
 
