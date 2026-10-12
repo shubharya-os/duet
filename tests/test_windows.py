@@ -183,6 +183,80 @@ def test_every_text_file_and_pipe_duet_reads_says_utf_8():
     assert not missing, "no encoding given:\n" + "\n".join(missing)
 
 
+def test_the_tests_name_their_encoding_too():
+    """The first scan covered duet/ and not the suite, so duet wrote UTF-8 and
+    its tests read it back as cp1252: "—" in the `duet skill default` marker
+    and the transcript came back as "â€”" and eleven tests failed on Windows."""
+    missing = []
+    for path in sorted((ROOT / "tests").glob("*.py")):
+        for line, what in encoding_left_to_the_platform(path.read_text(encoding="utf-8")):
+            missing.append("%s:%d %s" % (path.relative_to(ROOT), line, what))
+    assert not missing, "no encoding given:\n" + "\n".join(missing)
+
+
+def _demo_env(**extra):
+    env = dict(os.environ, NO_COLOR="1", PYTHONPATH=str(ROOT), **extra)
+    env.pop("PYTHONUTF8", None)
+    return env
+
+
+def test_duet_output_survives_a_pipe_that_is_cp1252(tmp_path):
+    """A Windows pipe or redirect defaults to cp1252, which has no "─", "✓" or
+    "✗": `duet demo | ...` died on its first line with UnicodeEncodeError.
+    PYTHONIOENCODING gives this machine's pipe the same encoding."""
+    proc = subprocess.run(
+        [sys.executable, "-m", "duet", "demo", "-C", str(tmp_path), "--quiet"],
+        capture_output=True, timeout=120, env=_demo_env(PYTHONIOENCODING="cp1252"),
+    )
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")[-2000:]
+    out = proc.stdout.decode("utf-8")           # UTF-8, whatever the platform default
+    assert "─" in out and "BOTH AGENTS SIGNED OFF" in out
+
+
+def test_duet_starts_where_no_home_directory_is_known(tmp_path):
+    """Windows with no USERPROFILE: Path.home() raises, and the adapters called
+    it at import, so every duet command died before doing anything."""
+    code = (
+        "import pathlib, sys\n"
+        "def nowhere(*a):\n"
+        "    raise RuntimeError('Could not determine home directory.')\n"
+        "pathlib.Path.home = classmethod(nowhere)\n"
+        "from duet.cli import main\n"
+        "sys.exit(main(['demo', '-C', sys.argv[1], '--quiet']))\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", code, str(tmp_path)], capture_output=True,
+                          timeout=120, env=_demo_env())
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")[-2000:]
+
+
+def test_the_quota_note_does_not_need_a_home_directory_either(monkeypatch):
+    from duet.adapters import codex_cli
+
+    def nowhere(*a):
+        raise RuntimeError("Could not determine home directory.")
+    monkeypatch.setattr(Path, "home", classmethod(nowhere))
+    monkeypatch.delenv("DUET_STATE_DIR", raising=False)
+    assert codex_cli.state_dir().name == ".duet"
+
+
+@pytest.mark.parametrize("windows, expected", [
+    (True, str(Path("C:/npm-prefix"))),                 # the shims sit in the prefix itself
+    (False, str(Path("C:/npm-prefix") / "bin")),
+])
+def test_npm_global_bin_is_the_prefix_itself_on_windows(monkeypatch, windows, expected):
+    from duet import cli
+
+    def run(argv, **kwargs):
+        if "bin" in argv:                     # gone since npm 9
+            return subprocess.CompletedProcess(argv, 1, "", "Unknown command: \"bin\"\n")
+        return subprocess.CompletedProcess(argv, 0, "C:/npm-prefix\n", "")
+
+    monkeypatch.setattr("duet.cli.launchable", list)
+    monkeypatch.setattr("duet.cli.winlaunch.WINDOWS", windows)
+    monkeypatch.setattr("duet.cli.subprocess.run", run)
+    assert cli._npm_global_bin() == expected
+
+
 def test_the_scan_catches_what_it_is_meant_to():
     assert encoding_left_to_the_platform("p.read_text()\nopen(x, 'w')\n"
                                          "subprocess.run(a, text=True)\n") == [

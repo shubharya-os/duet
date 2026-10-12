@@ -1221,9 +1221,12 @@ def _npm_global_bin() -> Optional[str]:
     """Where `npm install -g` puts commands, if npm will say.
 
     `npm bin -g` was removed in npm 9, so fall back to `npm prefix -g`, which
-    has been there throughout and prints the directory whose `bin` holds them.
+    has been there throughout and prints the directory whose `bin` holds them
+    — on Unix. On Windows npm puts its `.cmd` shims in the prefix itself; there
+    is no `bin` under it.
     """
-    for argv, suffix in ((["npm", "bin", "-g"], None), (["npm", "prefix", "-g"], "bin")):
+    prefix_suffix = None if winlaunch.WINDOWS else "bin"
+    for argv, suffix in ((["npm", "bin", "-g"], None), (["npm", "prefix", "-g"], prefix_suffix)):
         try:
             proc = subprocess.run(launchable(argv), capture_output=True, text=True,
                                   encoding="utf-8", errors="replace", timeout=30)
@@ -3026,10 +3029,14 @@ def cmd_detach(argv: List[str], args: argparse.Namespace) -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     # Sessions are long and mostly waiting on an agent. Piped or redirected runs
     # block-buffer by default, which makes a working session look hung.
-    try:
-        sys.stdout.reconfigure(line_buffering=True)
-    except (AttributeError, ValueError):  # pragma: no cover - very old interpreters
-        pass
+    # And UTF-8 always: a Windows pipe defaults to cp1252, which has no ✓, ✗ or
+    # →, so every piped or redirected run died on its first tick with a
+    # UnicodeEncodeError. Whatever reads the pipe gets UTF-8, as it does elsewhere.
+    for stream, extra in ((sys.stdout, {"line_buffering": True}), (sys.stderr, {})):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace", **extra)
+        except (AttributeError, ValueError):  # pragma: no cover - replaced or very old streams
+            pass
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     parser = build_parser()
     args = parser.parse_args(argv)

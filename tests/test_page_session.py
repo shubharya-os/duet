@@ -251,6 +251,6 @@ def test_the_same_session_without_the_rule_is_vetoed(tmp_path):
     result = orch.run()
     assert result.status != "consensus"
     events = [json.loads(line) for line in
-              (Path(result.session_dir) / "events.jsonl").read_text().splitlines() if line]
+              (Path(result.session_dir) / "events.jsonl").read_text(encoding="utf-8").splitlines() if line]
     veto = [e for e in events if e.get("kind") == "workflow_veto"]
     assert veto and "No test was added" in veto[0].get("reason", "")

@@ -55,14 +55,14 @@ def _available():
 @pytest.mark.parametrize("name,path", _available(), ids=lambda v: v if isinstance(v, str) else "")
 def test_install_sh_parses(name, path):
     argv = [path, "sh", "-n", str(INSTALL)] if name == "busybox" else [path, "-n", str(INSTALL)]
-    proc = subprocess.run(argv, capture_output=True, text=True)
+    proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8")
     assert proc.returncode == 0, "%s cannot parse install.sh:\n%s" % (name, proc.stderr)
 
 
 @pytest.mark.skipif(not shutil.which("shellcheck"), reason="shellcheck not installed")
 def test_install_sh_passes_shellcheck_as_posix_sh():
     proc = subprocess.run(["shellcheck", "--shell=sh", str(INSTALL)],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, encoding="utf-8")
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
@@ -150,11 +150,11 @@ def _sandbox(tmp_path, duet_body):
     bin_dir.mkdir()
 
     duet_stub = tmp_path / "duet-stub"
-    duet_stub.write_text(duet_body)
+    duet_stub.write_text(duet_body, encoding="utf-8")
     duet_stub.chmod(0o755)
 
     py = bin_dir / "python3"
-    py.write_text(FAKE_PY)
+    py.write_text(FAKE_PY, encoding="utf-8")
     py.chmod(0o755)
 
     env = {
@@ -185,7 +185,7 @@ def _run(env, shell="/bin/sh"):
     # enough: install.sh reopens /dev/tty when there is one, so run from a
     # terminal (as duet runs its gate) these tests saw a human to ask and took
     # the interactive path they were written to rule out.
-    return subprocess.run([shell, str(INSTALL)], capture_output=True, text=True,
+    return subprocess.run([shell, str(INSTALL)], capture_output=True, text=True, encoding="utf-8",
                           env=env, cwd=str(env["HOME"]), timeout=120, stdin=subprocess.DEVNULL,
                           start_new_session=True)
 
@@ -204,7 +204,7 @@ def test_install_sh_reaches_a_working_duet_through_the_venv_fallback(tmp_path, s
     # actually installed — and `setup` has to still be a real subcommand.
     assert '"%s" setup' % installed in proc.stdout, proc.stdout
     assert "setup" in subprocess.run(
-        [sys.executable, "-m", "duet", "--help"], capture_output=True, text=True,
+        [sys.executable, "-m", "duet", "--help"], capture_output=True, text=True, encoding="utf-8",
         cwd=str(REPO), timeout=60).stdout
 
 
@@ -254,7 +254,7 @@ def test_install_sh_warns_when_an_older_duet_shadows_the_new_one(tmp_path, shell
     stale_dir = tmp_path / "old"
     stale_dir.mkdir()
     stale = stale_dir / "duet"
-    stale.write_text("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'duet 0.0.1'; fi\nexit 0\n")
+    stale.write_text("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'duet 0.0.1'; fi\nexit 0\n", encoding="utf-8")
     stale.chmod(0o755)
 
     home, env = _sandbox(tmp_path, WORKING_DUET)
@@ -275,7 +275,7 @@ def test_install_sh_warns_when_the_duet_on_path_does_not_run(tmp_path, shell):
     stale_dir = tmp_path / "old"
     stale_dir.mkdir()
     stale = stale_dir / "duet"
-    stale.write_text(BROKEN_DUET)
+    stale.write_text(BROKEN_DUET, encoding="utf-8")
     stale.chmod(0o755)
 
     home, env = _sandbox(tmp_path, WORKING_DUET)
@@ -350,7 +350,7 @@ def test_a_run_with_no_terminal_still_puts_duet_in_place(tmp_path, shell):
     proc = _run(env, shell)
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
-    asked = calls.read_text() if calls.is_file() else ""
+    asked = calls.read_text(encoding="utf-8") if calls.is_file() else ""
     assert "skill install" in asked, "installer did not place /duet: %r" % asked
     assert "setup" not in asked, "setup needs consent and must not run unasked"
 

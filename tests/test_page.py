@@ -39,7 +39,7 @@ def args(**kwargs):
 
 def test_duet_chrome_is_obeyed_when_it_points_at_a_binary(tmp_path):
     binary = tmp_path / "my-chrome"
-    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     binary.chmod(0o755)
     assert chrome.find_chrome({"DUET_CHROME": str(binary)}) == str(binary)
 
@@ -59,7 +59,7 @@ def test_a_name_on_path_is_used_before_the_install_locations(monkeypatch):
 
 def test_chrome_is_found_where_it_installs_when_path_has_nothing(monkeypatch, tmp_path):
     installed = tmp_path / "Google Chrome"
-    installed.write_text("")
+    installed.write_text("", encoding="utf-8")
     installed.chmod(0o755)
     monkeypatch.setattr("duet.chrome.shutil.which", lambda name: None)
     monkeypatch.setattr(chrome, "INSTALL_PATHS", (str(tmp_path / "gone"), str(installed)))

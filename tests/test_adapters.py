@@ -49,7 +49,7 @@ def test_claude_adapter_sends_the_right_flags_and_parses_the_result(tmp_path, mo
     assert reply.meta["cost_usd"] == 0.04
     assert agent.session_id == "sess-123"
 
-    args = dump.read_text().splitlines()
+    args = dump.read_text(encoding="utf-8").splitlines()
     assert "-p" in args and "do the work" in args
     assert args[args.index("--output-format") + 1] == "json"
     assert args[args.index("--permission-mode") + 1] == "acceptEdits"
@@ -66,7 +66,7 @@ def test_claude_adapter_resumes_its_session_on_later_turns(tmp_path, monkeypatch
 
     agent.send("turn one")
     agent.send("turn two")
-    args = dump.read_text().splitlines()
+    args = dump.read_text(encoding="utf-8").splitlines()
     assert args[args.index("--resume") + 1] == "sess-123"
 
 
@@ -76,7 +76,7 @@ def test_claude_adapter_honours_bypass_mode_only_when_asked(tmp_path, monkeypatc
     agent = ClaudeCodeAdapter(name="claude", cwd=str(tmp_path), config={"permission_mode": "bypass"})
     agent.bin = fake_bin(tmp_path, "claude", CLAUDE_STUB)
     agent.send("go")
-    args = dump.read_text().splitlines()
+    args = dump.read_text(encoding="utf-8").splitlines()
     assert "--dangerously-skip-permissions" in args and "--permission-mode" not in args
 
 
@@ -263,10 +263,10 @@ def test_codex_adapter_passes_sandbox_and_workdir(tmp_path, monkeypatch):
 
     reply = agent.send("build it", system="you are gpt")
     assert reply.ok and "codex says hi" in reply.text
-    args = dump.read_text().splitlines()
+    args = dump.read_text(encoding="utf-8").splitlines()
     assert args[0] == "exec" and "--skip-git-repo-check" in args
     assert args[args.index("--sandbox") + 1] == "workspace-write"
-    dumped = dump.read_text()          # the prompt spans lines; check the whole dump
+    dumped = dump.read_text(encoding="utf-8")          # the prompt spans lines; check the whole dump
     assert "you are gpt" in dumped and "build it" in dumped
 
 
@@ -308,7 +308,7 @@ def test_codex_adapter_disables_colour_so_output_stays_parseable(tmp_path, monke
     agent = CodexCliAdapter(name="gpt", cwd=str(tmp_path))
     agent.bin = fake_bin(tmp_path, "codex", 'printf "%s\\n" "$@" > "$ARGDUMP"; echo hi')
     agent.send("go")
-    args = dump.read_text().splitlines()
+    args = dump.read_text(encoding="utf-8").splitlines()
     assert args[args.index("--color") + 1] == "never"
     assert args[args.index("-C") + 1] == str(tmp_path)
     assert "-o" in args
@@ -349,7 +349,7 @@ def test_claude_is_allowed_to_run_the_gate_itself(tmp_path, monkeypatch):
     agent.allow_gate("pytest -q && npm run lint")
     agent.send("go")
 
-    args = dump.read_text()
+    args = dump.read_text(encoding="utf-8")
     assert "Bash(pytest:*)" in args
     assert "Bash(npm:*)" in args
     assert "--dangerously-skip-permissions" not in args   # not a blanket grant
@@ -418,7 +418,7 @@ printf '%s' '{"message":"ok","verdict":"DONE"}' > "$out"
 ''')
     agent.send("turn one")
     agent.send("turn two")
-    assert "--last" in dump.read_text()
+    assert "--last" in dump.read_text(encoding="utf-8")
 
 
 def test_codex_state_round_trips_so_a_resumed_duet_session_keeps_continuity(tmp_path):
@@ -454,7 +454,7 @@ printf '%s' '{"message":"ok","verdict":"DONE"}' > "$out"
 ''')
     agent.send("turn one")
     agent.send("turn two")
-    assert "--last" not in dump.read_text()
+    assert "--last" not in dump.read_text(encoding="utf-8")
 
 
 def test_codex_failures_report_the_error_not_the_banner(tmp_path):
@@ -628,7 +628,7 @@ def test_a_usage_limit_is_written_down_when_it_happens(tmp_path):
     assert not reply.ok and "usage limit" in reply.error
     assert "duet doctor" in reply.error            # says what will happen next
     from datetime import datetime
-    note = json.loads(note_file().read_text())
+    note = json.loads(note_file().read_text(encoding="utf-8"))
     assert "usage limit" in note["message"]
     assert datetime.fromtimestamp(note["resets_at"]).strftime("%Y-%m-%d %H:%M") \
         == "2026-10-18 23:18"

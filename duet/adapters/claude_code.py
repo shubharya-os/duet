@@ -35,10 +35,13 @@ from duet.adapters.base import (
 DEFAULT_CANDIDATES = (
     os.environ.get("DUET_CLAUDE_BIN", ""),
     "claude",
-    str(Path.home() / ".claude" / "local" / "claude"),
+    # expanduser, not Path.home(): this runs at import, and Path.home() raises
+    # where no home directory is known (Windows without USERPROFILE), which
+    # took every duet command down with it.
+    os.path.expanduser(os.path.join("~", ".claude", "local", "claude")),
     "/opt/homebrew/bin/claude",
     "/usr/local/bin/claude",
-    str(Path.home() / ".local" / "bin" / "claude"),
+    os.path.expanduser(os.path.join("~", ".local", "bin", "claude")),
 )
 
 INSTALL_HINT = "npm install -g @anthropic-ai/claude-code"

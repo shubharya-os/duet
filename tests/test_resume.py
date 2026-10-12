@@ -101,7 +101,7 @@ def test_a_resumed_session_keeps_the_argument_and_finishes_it(tmp_path, capsys):
 
     # And the dead session's own record is left exactly as it was.
     assert state_of(Path(dead.session_dir))["rounds"] == 2
-    assert "Round 3" not in (Path(dead.session_dir) / "transcript.md").read_text()
+    assert "Round 3" not in (Path(dead.session_dir) / "transcript.md").read_text(encoding="utf-8")
 
 
 def test_it_does_not_re_run_the_turns_that_already_happened(tmp_path, capsys):
@@ -109,7 +109,7 @@ def test_it_does_not_re_run_the_turns_that_already_happened(tmp_path, capsys):
     dead, _ = interrupted(tmp_path, [WRITE, FIX, DONE], [OBJECT, DONE])
     assert resume(tmp_path, "--rounds", "6") == 0
 
-    transcript = (Path(newest_session(tmp_path)) / "transcript.md").read_text()
+    transcript = (Path(newest_session(tmp_path)) / "transcript.md").read_text(encoding="utf-8")
     assert "Round 1" not in transcript and "Round 2" not in transcript
     assert "Round 3 — claude" in transcript
     assert "added tests" in transcript          # claude's *second* scripted reply
@@ -183,11 +183,11 @@ def test_it_refuses_a_half_written_state_file_instead_of_guessing(tmp_path, caps
     dead, _ = interrupted(tmp_path, [WRITE], [OBJECT])
     saved = Path(dead.session_dir) / "state.json"
 
-    saved.write_text("{not json at all")
+    saved.write_text("{not json at all", encoding="utf-8")
     assert resume(tmp_path, dead.session_id, "--rounds", "6") == 2
     assert "saved no state.json" in capsys.readouterr().out
 
-    saved.write_text("{}")
+    saved.write_text("{}", encoding="utf-8")
     assert resume(tmp_path, dead.session_id, "--rounds", "6") == 2
     out = capsys.readouterr().out
     assert "recorded no task" in out
@@ -202,9 +202,9 @@ def test_it_refuses_an_argument_between_agents_this_pair_does_not_contain(tmp_pa
     """
     dead, _ = interrupted(tmp_path, [WRITE], [OBJECT])
     saved = Path(dead.session_dir) / "state.json"
-    data = json.loads(saved.read_text())
+    data = json.loads(saved.read_text(encoding="utf-8"))
     data["state"]["agents"] = ["claude", "someone-else"]
-    saved.write_text(json.dumps(data))
+    saved.write_text(json.dumps(data), encoding="utf-8")
 
     assert resume(tmp_path, dead.session_id, "--rounds", "6") == 2
     out = capsys.readouterr().out
@@ -225,7 +225,7 @@ def test_a_budget_smaller_than_the_rounds_already_used_explains_itself(tmp_path,
 def test_it_refuses_a_session_that_saved_no_state(tmp_path, capsys):
     crashed = tmp_path / ".duet" / "sessions" / "99999999-235959-dead"
     crashed.mkdir(parents=True)
-    (crashed / "events.jsonl").write_text("{}\n")
+    (crashed / "events.jsonl").write_text("{}\n", encoding="utf-8")
 
     assert resume(tmp_path, "99999999-235959-dead") == 2
     assert "saved no state.json" in capsys.readouterr().out
@@ -284,7 +284,7 @@ def test_a_named_session_can_be_resumed_past_a_newer_one(tmp_path, capsys):
     older, _ = interrupted(tmp_path, [WRITE, FIX, DONE], [OBJECT, DONE])
     crashed = tmp_path / ".duet" / "sessions" / "99999999-235959-dead"
     crashed.mkdir(parents=True)
-    (crashed / "events.jsonl").write_text("{}\n")
+    (crashed / "events.jsonl").write_text("{}\n", encoding="utf-8")
 
     code, data = resume_json(tmp_path, capsys, older.session_id, "--rounds", "6")
     assert code == 0 and data["session"] == older.session_id
@@ -294,7 +294,7 @@ def test_a_dead_session_with_no_state_is_skipped_when_no_id_is_given(tmp_path, c
     older, _ = interrupted(tmp_path, [WRITE, FIX, DONE], [OBJECT, DONE])
     crashed = tmp_path / ".duet" / "sessions" / "99999999-235959-dead"
     crashed.mkdir(parents=True)
-    (crashed / "events.jsonl").write_text("{}\n")
+    (crashed / "events.jsonl").write_text("{}\n", encoding="utf-8")
 
     code, data = resume_json(tmp_path, capsys, "--rounds", "6")
     assert code == 0
@@ -438,7 +438,7 @@ def test_a_round_interrupted_mid_turn_is_not_counted_as_taken(tmp_path):
     assert result.status == "interrupted"
     assert orch.round_no == 2, "only rounds that produced a turn should count"
 
-    state = json.loads((Path(result.session_dir) / "state.json").read_text())
+    state = json.loads((Path(result.session_dir) / "state.json").read_text(encoding="utf-8"))
     assert state["rounds"] == 2
 
     from duet.orchestrator import rounds_taken
@@ -468,7 +468,7 @@ def test_an_interrupted_turn_keeps_the_directive_it_was_owed(tmp_path):
     orch.run()
     assert orch.pending_directive.get("b") == "break the stall"
 
-    saved = json.loads((Path(orch.session_dir) / "state.json").read_text())
+    saved = json.loads((Path(orch.session_dir) / "state.json").read_text(encoding="utf-8"))
     assert saved["pending_directive"]["b"] == "break the stall"
 
 
@@ -487,7 +487,7 @@ def test_files_an_agent_asked_to_see_survive_a_resume(tmp_path):
         for n in ("a", "b")
     })
     orch.run()
-    saved = json.loads((Path(orch.session_dir) / "state.json").read_text())
+    saved = json.loads((Path(orch.session_dir) / "state.json").read_text(encoding="utf-8"))
     assert saved["pending_reads"]["a"] == ["duet/cli.py"]
 
     fresh = Orchestrator(cfg, adapters={
@@ -516,7 +516,7 @@ def test_a_malformed_state_file_never_raises(tmp_path, broken, capsys):
                           "max_rounds": 8},
                "state": {"agents": ["a", "b"]}, "rounds": 1}
     payload.update(broken)
-    session.joinpath("state.json").write_text(json.dumps(payload))
+    session.joinpath("state.json").write_text(json.dumps(payload), encoding="utf-8")
 
     code = main(["resume", "20260101-000000-bbbb", "-C", str(tmp_path)])
     out = capsys.readouterr().out

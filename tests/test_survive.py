@@ -85,7 +85,7 @@ def run_child(tmp_path, where, second=False, sig="SIGTERM"):
     started = time.monotonic()
     proc = subprocess.run(
         [sys.executable, "-c", CHILD, str(tmp_path), where, "1" if second else "0", sig],
-        capture_output=True, text=True, timeout=60, cwd=str(tmp_path),
+        capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=str(tmp_path),
         env={**os.environ, "PYTHONPATH": str(ROOT)},
     )
     return proc, time.monotonic() - started
@@ -93,7 +93,7 @@ def run_child(tmp_path, where, second=False, sig="SIGTERM"):
 
 def events_of(tmp_path):
     path = tmp_path / ".duet" / "sessions" / "20261011-120000-sig1" / "events.jsonl"
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 @pytest.mark.parametrize("sig", ["SIGTERM", "SIGHUP", "SIGINT"])
@@ -109,9 +109,9 @@ def test_a_signal_mid_turn_ends_the_session_on_the_record(tmp_path, sig):
     assert end["resume"].startswith("duet resume 20261011-120000-sig1")
 
     session = tmp_path / ".duet" / "sessions" / "20261011-120000-sig1"
-    report = (session / "report.md").read_text()
+    report = (session / "report.md").read_text(encoding="utf-8")
     assert "duet resume 20261011-120000-sig1" in report
-    state = json.loads((session / "state.json").read_text())
+    state = json.loads((session / "state.json").read_text(encoding="utf-8"))
     assert state["result"]["status"] == "interrupted"
     # Rounds 1 and 2 happened; the one that was cut off is the one resume re-runs.
     assert state["rounds"] == 2
@@ -146,7 +146,7 @@ def test_a_second_signal_during_shutdown_exits_at_once(tmp_path):
 def write_session(tmp_path, name, events):
     session = tmp_path / ".duet" / "sessions" / name
     session.mkdir(parents=True)
-    (session / "events.jsonl").write_text("\n".join(json.dumps(e) for e in events) + "\n")
+    (session / "events.jsonl").write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
 
 
 def gone_pid():
@@ -239,7 +239,7 @@ def test_detach_returns_at_once_and_runs_in_its_own_session(tmp_path, capsys):
     pid = None
     while time.monotonic() < deadline and pid is None:
         if events_path.exists():
-            for line in events_path.read_text().splitlines():
+            for line in events_path.read_text(encoding="utf-8").splitlines():
                 if line.strip():
                     event = json.loads(line)
                     if event.get("kind") == "session_start":
@@ -248,7 +248,7 @@ def test_detach_returns_at_once_and_runs_in_its_own_session(tmp_path, capsys):
         if pid is None:
             time.sleep(0.1)
     assert pid, "the detached session never started (log: %s)" % (
-        (tmp_path / ".duet" / "sessions" / (session_id + ".log")).read_text()
+        (tmp_path / ".duet" / "sessions" / (session_id + ".log")).read_text(encoding="utf-8")
         if (tmp_path / ".duet" / "sessions" / (session_id + ".log")).exists() else "<missing>")
     assert _pid_alive(pid), "the detached child had already died"
     assert os.getsid(pid) != our_sid, "the detached child is still in this process's session"
@@ -287,7 +287,7 @@ def test_detach_on_resume_continues_the_right_session(tmp_path, capsys):
     events_path = tmp_path / ".duet" / "sessions" / continued_id / "events.jsonl"
     while time.monotonic() < deadline and pid is None:
         if events_path.exists():
-            for line in events_path.read_text().splitlines():
+            for line in events_path.read_text(encoding="utf-8").splitlines():
                 if line.strip():
                     event = json.loads(line)
                     if event.get("kind") == "session_start":
@@ -318,7 +318,7 @@ def test_detach_is_refused_on_windows(monkeypatch, tmp_path, capsys):
 def test_status_shows_why_a_detached_session_never_started(tmp_path, capsys):
     sessions = tmp_path / ".duet" / "sessions"
     sessions.mkdir(parents=True)
-    (sessions / "20261011-140000-nope.log").write_text("✗ the acceptance gate cannot run: no such command\n")
+    (sessions / "20261011-140000-nope.log").write_text("✗ the acceptance gate cannot run: no such command\n", encoding="utf-8")
     assert main(["status", "20261011-140000-nope", "-C", str(tmp_path)]) == 2
     assert "the acceptance gate cannot run" in capsys.readouterr().out
 

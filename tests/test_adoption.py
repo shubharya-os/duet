@@ -85,7 +85,7 @@ def test_the_invocation_survives_a_space_in_the_path(tmp_path, monkeypatch):
     spaced = tmp_path / "Ada Lovelace" / "bin"
     spaced.mkdir(parents=True)
     fake = spaced / "duet"
-    fake.write_text("#!/bin/sh\necho 'duet 0.1.0'\n")
+    fake.write_text("#!/bin/sh\necho 'duet 0.1.0'\n", encoding="utf-8")
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
 
     monkeypatch.setattr("duet.cli.shutil.which",
@@ -130,12 +130,12 @@ def test_reinstall_updates_a_file_duet_wrote_with_an_older_invocation(tmp_path, 
     monkeypatch.setattr("duet.cli.shutil.which", lambda name: "/old/path/duet")
     assert main(["skill", "install", "--dir", str(home)]) == 0
     command = home / ".claude" / "commands" / "duet.md"
-    assert "/old/path/duet" in command.read_text()
+    assert "/old/path/duet" in command.read_text(encoding="utf-8")
     capsys.readouterr()
 
     monkeypatch.setattr("duet.cli.shutil.which", lambda name: "/new/path/duet")
     assert main(["skill", "install", "--dir", str(home)]) == 0, capsys.readouterr().out
-    text = command.read_text()
+    text = command.read_text(encoding="utf-8")
     assert "/new/path/duet" in text
     assert "/old/path/duet" not in text
 
@@ -151,13 +151,13 @@ def test_a_hand_edited_file_is_still_protected(tmp_path, monkeypatch, capsys):
     capsys.readouterr()
 
     command = home / ".claude" / "commands" / "duet.md"
-    command.write_text(command.read_text() + "\n## my own section\nDo not lose this.\n")
+    command.write_text(command.read_text(encoding="utf-8") + "\n## my own section\nDo not lose this.\n", encoding="utf-8")
 
     assert main(["skill", "install", "--dir", str(home)]) == 1
     out = capsys.readouterr().out
     assert "already there" in out
     assert "--force" in out
-    assert "Do not lose this." in command.read_text()
+    assert "Do not lose this." in command.read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------
@@ -210,6 +210,10 @@ def test_npm_global_bin_falls_back_when_npm_bin_g_is_gone(monkeypatch):
             return Result(1, "Unknown command: \"bin\"\n")
         return Result(0, "/opt/homebrew\n")
 
+    # On Windows npm resolves to a shim that runs node on npm's script, which
+    # moves "bin" out of argv[1]; the fake should see the command as written.
+    monkeypatch.setattr("duet.cli.launchable", list)
+    monkeypatch.setattr("duet.cli.winlaunch.WINDOWS", False)
     monkeypatch.setattr("duet.cli.subprocess.run", run)
     assert cli._npm_global_bin() == str(Path("/opt/homebrew") / "bin")
 
@@ -363,7 +367,7 @@ def test_a_cli_installed_off_path_is_not_called_missing(tmp_path, monkeypatch):
     from duet.cli import _missing_agent_clis
 
     installed = tmp_path / "claude"
-    installed.write_text("#!/bin/sh\nexit 0\n")
+    installed.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     installed.chmod(0o755)
 
     monkeypatch.setattr("duet.adapters.base.Adapter.which",
@@ -420,7 +424,7 @@ def test_an_empty_directory_is_pointed_at_build_not_run(tmp_path, capsys):
     assert "duet build" in out
     assert 'duet run "..."' not in out
 
-    (tmp_path / "app.py").write_text("x = 1\n")
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
     cli.cmd_status(args)
     out = capsys.readouterr().out
     assert 'duet run "..."' in out
@@ -440,7 +444,7 @@ def test_every_skill_discloses_a_same_vendor_fallback():
 
     skill_dir = Path(duet.__file__).parent / "skill"
     for name in ("SKILL.md", "claude-command.md", "codex-skill.md", "codex-prompt.md"):
-        text = skill_dir.joinpath(name).read_text()
+        text = skill_dir.joinpath(name).read_text(encoding="utf-8")
         assert "Only have one of the two?" in text, name
         assert "Never present it as a cross-vendor second opinion" in text, name
 
@@ -454,7 +458,7 @@ def test_default_writes_a_block_every_session_reads(tmp_path, capsys):
     from duet import cli
 
     assert cli.cmd_skill_default(_home(tmp_path), enable=True) == 0
-    claude_md = (tmp_path / ".claude" / "CLAUDE.md").read_text()
+    claude_md = (tmp_path / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
     assert cli.DEFAULT_START in claude_md and cli.DEFAULT_END in claude_md
     assert 'fix "<the bug>"' in claude_md and "{{DUET}}" not in claude_md
     assert "Do it directly, without duet" in claude_md          # it is scoped, not total
@@ -468,17 +472,17 @@ def test_default_keeps_what_you_already_had_and_undo_restores_it_exactly(tmp_pat
 
     mine = "# my rules\n\nalways use tabs\n"
     (tmp_path / ".claude").mkdir()
-    (tmp_path / ".claude" / "CLAUDE.md").write_text(mine)
+    (tmp_path / ".claude" / "CLAUDE.md").write_text(mine, encoding="utf-8")
 
     cli.cmd_skill_default(_home(tmp_path), enable=True)
-    both = (tmp_path / ".claude" / "CLAUDE.md").read_text()
+    both = (tmp_path / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
     assert both.startswith(mine.rstrip("\n")) and cli.DEFAULT_START in both
 
     cli.cmd_skill_default(_home(tmp_path), enable=True)          # twice: no second block
-    assert (tmp_path / ".claude" / "CLAUDE.md").read_text().count(cli.DEFAULT_START) == 1
+    assert (tmp_path / ".claude" / "CLAUDE.md").read_text(encoding="utf-8").count(cli.DEFAULT_START) == 1
 
     cli.cmd_skill_default(_home(tmp_path), enable=False)
-    assert (tmp_path / ".claude" / "CLAUDE.md").read_text() == mine
+    assert (tmp_path / ".claude" / "CLAUDE.md").read_text(encoding="utf-8") == mine
 
 
 def test_undo_removes_a_file_duet_created_rather_than_leaving_it_empty(tmp_path, capsys):
@@ -500,7 +504,7 @@ def test_the_default_block_tells_agents_inside_a_session_not_to_nest(tmp_path, c
     from duet import cli
 
     cli.cmd_skill_default(_home(tmp_path), enable=True)
-    text = (tmp_path / ".claude" / "CLAUDE.md").read_text()
+    text = (tmp_path / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
     assert "already one of the two agents inside a duet session" in text
 
 
@@ -524,7 +528,7 @@ def test_gemini_and_opencode_get_duet_only_where_they_are_used(tmp_path, capsys)
     (tmp_path / ".gemini").mkdir()
     (tmp_path / ".config" / "opencode").mkdir(parents=True)
     cli.cmd_skill(args)
-    raw = (tmp_path / ".gemini" / "commands" / "duet.toml").read_text()
+    raw = (tmp_path / ".gemini" / "commands" / "duet.toml").read_text(encoding="utf-8")
     if tomllib is not None:
         toml = tomllib.loads(raw)
         assert set(toml) == {"description", "prompt"}
@@ -533,7 +537,7 @@ def test_gemini_and_opencode_get_duet_only_where_they_are_used(tmp_path, capsys)
         assert raw.count("\'\'\'") == 2 and "\ndescription = " in raw and "\nprompt = " in raw
         prompt = raw.split("\'\'\'")[1]
     assert "{{args}}" in prompt and "$ARGUMENTS" not in prompt
-    opencode = (tmp_path / ".config" / "opencode" / "commands" / "duet.md").read_text()
+    opencode = (tmp_path / ".config" / "opencode" / "commands" / "duet.md").read_text(encoding="utf-8")
     assert opencode.startswith("---\ndescription: ") and "$ARGUMENTS" in opencode
 
 
@@ -550,11 +554,11 @@ def test_default_never_creates_the_opencode_file_that_would_shadow_claude_md(tmp
     (tmp_path / ".gemini").mkdir()
     cli.cmd_skill_default(_home(tmp_path), enable=True)
     assert not (tmp_path / ".config" / "opencode" / "AGENTS.md").exists()
-    assert cli.DEFAULT_START in (tmp_path / ".gemini" / "GEMINI.md").read_text()
+    assert cli.DEFAULT_START in (tmp_path / ".gemini" / "GEMINI.md").read_text(encoding="utf-8")
 
-    (tmp_path / ".config" / "opencode" / "AGENTS.md").write_text("# my opencode rules\n")
+    (tmp_path / ".config" / "opencode" / "AGENTS.md").write_text("# my opencode rules\n", encoding="utf-8")
     cli.cmd_skill_default(_home(tmp_path), enable=True)
-    assert cli.DEFAULT_START in (tmp_path / ".config" / "opencode" / "AGENTS.md").read_text()
+    assert cli.DEFAULT_START in (tmp_path / ".config" / "opencode" / "AGENTS.md").read_text(encoding="utf-8")
 
 
 def test_project_mode_writes_the_repositorys_agents_md_for_cursor(tmp_path, capsys):
@@ -562,12 +566,12 @@ def test_project_mode_writes_the_repositorys_agents_md_for_cursor(tmp_path, caps
 
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "AGENTS.md").write_text("# house rules\n")
+    (repo / "AGENTS.md").write_text("# house rules\n", encoding="utf-8")
     args = _home(tmp_path)
     args.project, args.root = True, str(repo)
     cli.cmd_skill_default(args, enable=True)
-    text = (repo / "AGENTS.md").read_text()
+    text = (repo / "AGENTS.md").read_text(encoding="utf-8")
     assert text.startswith("# house rules") and cli.DEFAULT_START in text
     assert not (tmp_path / ".claude" / "CLAUDE.md").exists()   # the home dir untouched
     cli.cmd_skill_default(args, enable=False)
-    assert (repo / "AGENTS.md").read_text() == "# house rules\n"
+    assert (repo / "AGENTS.md").read_text(encoding="utf-8") == "# house rules\n"

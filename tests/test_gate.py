@@ -36,19 +36,19 @@ def tools_present(monkeypatch):
 
 
 def test_a_python_project_with_tests(tmp_path, tools_present):
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
     (tmp_path / "tests").mkdir()
     assert detect(str(tmp_path)) == "pytest -q"
 
 
 def test_pyproject_without_any_tests_is_not_enough(tmp_path, tools_present):
     """A pyproject with no tests would give a gate that passes vacuously."""
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
     assert detect(str(tmp_path)) is None
 
 
 def test_loose_test_files_count(tmp_path, tools_present):
-    (tmp_path / "test_thing.py").write_text("def test_ok():\n    assert True\n")
+    (tmp_path / "test_thing.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
     assert detect(str(tmp_path)) == "pytest -q"
 
 
@@ -58,19 +58,19 @@ def test_a_swift_test_directory_is_not_a_python_one(tmp_path, tools_present):
     `pytest -q`: it collects nothing, exits 5, and is red every round, which
     blocks both sign-offs for the whole session."""
     (tmp_path / "Tests").mkdir()
-    (tmp_path / "Tests" / "AppLogicTests.swift").write_text("func testScore() {}\n")
+    (tmp_path / "Tests" / "AppLogicTests.swift").write_text("func testScore() {}\n", encoding="utf-8")
     assert detect(str(tmp_path)) is None
 
 
 def test_a_tests_directory_with_python_in_it_still_counts(tmp_path, tools_present):
     """Nested layouts included — the old check never looked inside at all."""
     (tmp_path / "tests" / "unit").mkdir(parents=True)
-    (tmp_path / "tests" / "unit" / "test_deep.py").write_text("def test_ok():\n    assert True\n")
+    (tmp_path / "tests" / "unit" / "test_deep.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
     assert detect(str(tmp_path)) == "pytest -q"
 
 
 def test_npm_test_script(tmp_path, tools_present):
-    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": "jest"}}))
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": "jest"}}), encoding="utf-8")
     assert detect(str(tmp_path)) == "npm test"
 
 
@@ -78,19 +78,19 @@ def test_the_npm_placeholder_script_is_ignored(tmp_path, tools_present):
     """`npm init` writes a test script that only prints an error and exits 1 —
     taking it would gate every session on a guaranteed failure."""
     (tmp_path / "package.json").write_text(json.dumps(
-        {"scripts": {"test": 'echo "Error: no test specified" && exit 1'}}))
+        {"scripts": {"test": 'echo "Error: no test specified" && exit 1'}}), encoding="utf-8")
     assert detect(str(tmp_path)) is None
 
 
 def test_npm_falls_back_to_check_then_ci(tmp_path, tools_present):
-    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"check": "tsc --noEmit"}}))
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"check": "tsc --noEmit"}}), encoding="utf-8")
     assert detect(str(tmp_path)) == "npm run check"
 
 
 def test_a_makefile_needs_an_actual_test_target(tmp_path, tools_present):
-    (tmp_path / "Makefile").write_text("build:\n\tgcc main.c\n")
+    (tmp_path / "Makefile").write_text("build:\n\tgcc main.c\n", encoding="utf-8")
     assert detect(str(tmp_path)) is None
-    (tmp_path / "Makefile").write_text("build:\n\tgcc main.c\n\ntest:\n\t./run_tests\n")
+    (tmp_path / "Makefile").write_text("build:\n\tgcc main.c\n\ntest:\n\t./run_tests\n", encoding="utf-8")
     assert detect(str(tmp_path)) == "make test"
 
 
@@ -101,7 +101,7 @@ def test_a_makefile_is_no_use_without_make(tmp_path, monkeypatch):
     not start — and a gate that cannot start fails every round and vetoes both
     agents forever."""
     monkeypatch.setattr("duet.gate.shutil.which", lambda name: None)
-    (tmp_path / "Makefile").write_text("test:\n\t./run_tests\n")
+    (tmp_path / "Makefile").write_text("test:\n\t./run_tests\n", encoding="utf-8")
     assert detect(str(tmp_path)) is None
 
 
@@ -110,7 +110,7 @@ def test_other_ecosystems(tmp_path, tools_present):
                              ("mix.exs", "mix test"), ("pom.xml", "mvn -q test")]:
         root = tmp_path / marker.replace(".", "_")
         root.mkdir()
-        (root / marker).write_text("x")
+        (root / marker).write_text("x", encoding="utf-8")
         assert detect(str(root)) == expected
 
 
@@ -120,7 +120,7 @@ def test_an_empty_directory_gets_nothing(tmp_path):
 
 
 def test_a_broken_package_json_does_not_raise(tmp_path):
-    (tmp_path / "package.json").write_text("{not json")
+    (tmp_path / "package.json").write_text("{not json", encoding="utf-8")
     assert detect(str(tmp_path)) is None
 
 
@@ -132,7 +132,7 @@ def test_a_detected_gate_that_cannot_start_is_not_returned(tmp_path, monkeypatch
     every turn and no session could ever reach consensus, however right the
     pair were. Worse than no gate, because it blocks the finish."""
     (tmp_path / "tests").mkdir()
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
 
     monkeypatch.setattr("duet.gate.shutil.which", lambda name: None)
     monkeypatch.setattr("duet.gate._python_module_form", lambda command: None)
@@ -143,7 +143,7 @@ def test_pytest_falls_back_to_the_interpreter_that_has_it(tmp_path, monkeypatch)
     """pytest is usually in a virtualenv rather than on PATH, and the python
     running duet is the one most likely to have it."""
     (tmp_path / "tests").mkdir()
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
 
     monkeypatch.setattr("duet.gate.shutil.which", lambda name: None)
     found = detect(str(tmp_path))
@@ -158,14 +158,14 @@ def _executable(path, body="#!/bin/sh\nexit 0\n"):
     import stat
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
     return path
 
 
 def _a_python_project(root):
     root.mkdir(parents=True, exist_ok=True)
-    (root / "pyproject.toml").write_text("[project]\nname='x'\n")
+    (root / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
     (root / "tests").mkdir(exist_ok=True)
     return root
 
@@ -282,9 +282,9 @@ def test_a_relative_launcher_in_the_project_counts(tmp_path, monkeypatch):
     import os
     import stat
 
-    (tmp_path / "build.gradle").write_text("x")
+    (tmp_path / "build.gradle").write_text("x", encoding="utf-8")
     launcher = tmp_path / "gradlew"
-    launcher.write_text("#!/bin/sh\nexit 0\n")
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     launcher.chmod(launcher.stat().st_mode | stat.S_IEXEC)
 
     monkeypatch.setattr("duet.gate.shutil.which", lambda name: None)
@@ -294,7 +294,7 @@ def test_a_relative_launcher_in_the_project_counts(tmp_path, monkeypatch):
 def test_an_npm_script_is_dropped_when_npm_is_missing(tmp_path, monkeypatch):
     import json as _json
 
-    (tmp_path / "package.json").write_text(_json.dumps({"scripts": {"test": "jest"}}))
+    (tmp_path / "package.json").write_text(_json.dumps({"scripts": {"test": "jest"}}), encoding="utf-8")
     monkeypatch.setattr("duet.gate.shutil.which", lambda name: None)
     assert detect(str(tmp_path)) is None
 
@@ -328,7 +328,7 @@ def test_a_project_local_launcher_is_runnable(tmp_path):
     from duet.gate import why_unusable
 
     launcher = tmp_path / "run-tests.sh"
-    launcher.write_text("#!/bin/sh\nexit 0\n")
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     launcher.chmod(launcher.stat().st_mode | stat.S_IEXEC)
     assert why_unusable("run-tests.sh", str(tmp_path)) is None
     assert why_unusable("missing.sh", str(tmp_path)) is not None

@@ -16,8 +16,8 @@ def test_the_committed_plugin_is_exactly_what_the_sources_render():
 
 
 def test_the_plugin_version_is_the_package_version():
-    plugin = json.loads((ROOT / "plugin/.claude-plugin/plugin.json").read_text())
-    market = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())
+    plugin = json.loads((ROOT / "plugin/.claude-plugin/plugin.json").read_text(encoding="utf-8"))
+    market = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8"))
     assert plugin["version"] == market["plugins"][0]["version"] == __version__
     assert market["plugins"][0]["source"] == "./plugin"
 
@@ -41,7 +41,7 @@ def test_skill_install_leaves_claude_code_to_the_plugin_when_it_is_installed(tmp
     plugins = home / ".claude" / "plugins"
     plugins.mkdir(parents=True)
     (plugins / "installed_plugins.json").write_text(json.dumps(
-        {"version": 2, "plugins": {"duet@duet": [{"scope": "user"}]}}))
+        {"version": 2, "plugins": {"duet@duet": [{"scope": "user"}]}}), encoding="utf-8")
 
     assert main(["skill", "install", "--dir", str(home)]) == 0
     assert not (home / ".claude" / "commands" / "duet.md").exists()

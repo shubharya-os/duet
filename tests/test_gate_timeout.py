@@ -160,7 +160,7 @@ def test_a_replay_that_runs_out_of_time_is_not_a_test_result(tmp_path):
     either way — it does not get to count as "the tests fail on the original"."""
     from duet import workflows
 
-    (tmp_path / "test_app.py").write_text("def test_x():\n    assert True\n")
+    (tmp_path / "test_app.py").write_text("def test_x():\n    assert True\n", encoding="utf-8")
     state = {"gate": SLOW_THEN_FAILING_GATE, "gate_timeout": 1}
     workflows.snapshot(str(tmp_path), state)
     assert workflows.replay_fails(str(tmp_path), state) is None
@@ -175,7 +175,7 @@ def test_refactor_does_not_call_a_slow_suite_failing(tmp_path, capsys):
     from duet import workflow_commands
 
     (tmp_path / ".duet").mkdir()
-    (tmp_path / ".duet" / "config.json").write_text(json.dumps({"gate_timeout": 1}))
+    (tmp_path / ".duet" / "config.json").write_text(json.dumps({"gate_timeout": 1}), encoding="utf-8")
     args = argparse.Namespace(what=["split it"], root=str(tmp_path), gate=SLOW_THEN_FAILING_GATE,
                               no_gate=False, allow_nested=False, json=False, command="")
     assert workflow_commands.run(args, "refactor") == 3

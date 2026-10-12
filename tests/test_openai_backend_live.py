@@ -124,7 +124,7 @@ def test_the_api_backend_builds_a_file_and_signs_off(tmp_path, fake_api, monkeyp
     result = orch.run()
 
     # the file exists because the harness applied a patch from a real HTTP reply
-    assert (tmp_path / "greet.py").read_text() == GREET
+    assert (tmp_path / "greet.py").read_text(encoding="utf-8") == GREET
     assert result.status == "consensus"
 
     # and the request duet sent was well formed, checked at the server

@@ -137,7 +137,7 @@ def test_a_config_saved_with_colliding_names_is_repaired_on_load(tmp_path):
     (tmp_path / ".duet" / "config.json").write_text(json.dumps({"agents": [
         {"name": "claude-sonnet", "backend": "claude-code", "model": "sonnet"},
         {"name": "claude-sonnet", "backend": "claude-code", "model": "sonnet"},
-    ]}))
+    ]}), encoding="utf-8")
 
     names = load_config(str(tmp_path)).agent_names
     assert names == ["claude-sonnet-1", "claude-sonnet-2"]

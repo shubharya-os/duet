@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Fixed: the 11 tests still failing on windows-latest after the first round.
+  - duet's own output is now UTF-8 on every platform. A Windows pipe or
+    redirect defaults to cp1252, which has no `─`, `✓`, `✗` or `→`, so
+    `duet demo | ...` (and any agent capturing duet's output) died on its first
+    line with `UnicodeEncodeError`. stdout and stderr are reconfigured to UTF-8
+    with `errors="replace"` at startup.
+  - importing the Claude Code and Codex adapters called `Path.home()`, which
+    raises where no home directory is known (Windows without `USERPROFILE`),
+    so every duet command failed before it started. Those candidate paths now
+    use `os.path.expanduser`, which leaves `~` alone instead of raising; so
+    does the codex quota note's `~/.duet` state directory.
+  - `npm prefix -g` names the directory npm's global commands are in on
+    Windows; duet appended `bin`, which exists only on Unix.
+  - the test suite itself read and wrote text in the platform default
+    encoding (the first round's scan covered `duet/` only), so on Windows it
+    read duet's UTF-8 files back as cp1252 and saw "â€”" for "—". Every text
+    read, write and `text=True` pipe in `tests/` now names UTF-8, and the scan
+    covers `tests/` too.
+  - tests that assumed POSIX now follow the platform: the starter gate's
+    quoting is checked for both sh and cmd.exe; two workflow gates written as
+    `test "$(cat f)" = ...` (sh only: cmd.exe never expands `$(...)`, so the
+    gate gave the same answer every time) are now Python one-liners that mean
+    the same in both shells; `duet skill install` is checked for the rendered
+    command rather than the literal `duet run` (on Windows the invocation is
+    `...\duet.EXE`); the npm fallback test no longer assumes `argv[1]` survives
+    Windows' shim resolution.
 - Fixed: duet did not work on Windows (129 tests failed on windows-latest).
   - every subprocess duet reads text from now decodes it as UTF-8 (with
     `errors="replace"`), not the platform default, which is cp1252 on Windows;

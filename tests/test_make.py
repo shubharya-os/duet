@@ -29,7 +29,7 @@ def csv_of(*rows):
 def write_ledger(root, text):
     folder = Path(root) / "make"
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "features.csv").write_text(text)
+    (folder / "features.csv").write_text(text, encoding="utf-8")
 
 
 # -- features.csv -----------------------------------------------------------
@@ -77,8 +77,8 @@ def test_recon_check_reports_dropped_rows_and_fails_when_none_count(tmp_path, ca
 def product(root):
     (root / "tests").mkdir(parents=True, exist_ok=True)
     (root / "tests" / "test_shelf.py").write_text(
-        "def test_shared_shelf():\n    assert True\n")
-    (root / "shelf.py").write_text("def add(): pass\n")
+        "def test_shared_shelf():\n    assert True\n", encoding="utf-8")
+    (root / "shelf.py").write_text("def add(): pass\n", encoding="utf-8")
 
 
 def test_parity_arithmetic(tmp_path):
@@ -113,7 +113,7 @@ def test_a_skip_without_a_reason_is_a_todo(tmp_path):
 ])
 def test_done_without_checkable_evidence_counts_as_todo(tmp_path, evidence):
     product(tmp_path)
-    (tmp_path.parent / "outside.py").write_text("x = 1\n")
+    (tmp_path.parent / "outside.py").write_text("x = 1\n", encoding="utf-8")
     write_ledger(tmp_path, HEADER + "\n")
     rows, _ = make.parse_features(csv_of(("shared shelf", "a", "must", SOURCE, "done", evidence, "")))
     result = make.score(rows, str(tmp_path))
@@ -138,7 +138,7 @@ def test_parity_stage_writes_the_report_and_exits_1_with_a_must_left(tmp_path):
         ("shared shelf", "a", "must", SOURCE, "done", "test_shared_shelf", ""),
         ("reading goals", "a", "must", SOURCE, "done", "test_reading_goals", "")))
     assert main(["make", "--stage", "parity", "-C", str(tmp_path)]) == 1
-    report = (tmp_path / "make" / "parity.md").read_text()
+    report = (tmp_path / "make" / "parity.md").read_text(encoding="utf-8")
     assert "NOT shippable" in report and "reading goals" in report
     assert "counted as todo" in report.lower()
 
@@ -162,7 +162,7 @@ def test_parity_stage_exits_0_when_every_must_is_done(tmp_path):
     write_ledger(tmp_path, csv_of(
         ("shared shelf", "a", "must", SOURCE, "done", "test_shared_shelf", "")))
     assert main(["make", "--stage", "parity", "-C", str(tmp_path)]) == 0
-    assert "shippable" in (tmp_path / "make" / "parity.md").read_text()
+    assert "shippable" in (tmp_path / "make" / "parity.md").read_text(encoding="utf-8")
 
 
 # -- the sweep ---------------------------------------------------------------
@@ -184,26 +184,26 @@ def test_brand_comes_from_like_and_brand_json():
     "PageTurner()",
 ])
 def test_the_sweep_finds_references_in_contents_and_identifiers(tmp_path, line):
-    (tmp_path / "app.py").write_text("x = 1\n" + line + "\n")
+    (tmp_path / "app.py").write_text("x = 1\n" + line + "\n", encoding="utf-8")
     found = make.sweep(str(tmp_path), BRAND)
     assert [(f.path, f.line) for f in found][:1] == [("app.py", 2)]
 
 
 def test_a_six_digit_colour_with_no_short_form_is_only_found_long(tmp_path):
-    (tmp_path / "a.css").write_text("a { color: #abc; }\nb { color: #A1B2C3; }\n")
+    (tmp_path / "a.css").write_text("a { color: #abc; }\nb { color: #A1B2C3; }\n", encoding="utf-8")
     found = make.sweep(str(tmp_path), BRAND)
     assert [f.line for f in found] == [2]
 
 
 def test_a_longer_hex_is_not_a_colour_match(tmp_path):
-    (tmp_path / "a.txt").write_text("hash #ff3366aa99\nshort #f36a\n")
+    (tmp_path / "a.txt").write_text("hash #ff3366aa99\nshort #f36a\n", encoding="utf-8")
     assert make.sweep(str(tmp_path), BRAND) == []
 
 
 def test_the_sweep_finds_file_names(tmp_path):
     (tmp_path / "src" / "BooklyClient").mkdir(parents=True)
-    (tmp_path / "src" / "BooklyClient" / "index.js").write_text("export {}\n")
-    (tmp_path / "src" / "bookly_utils.py").write_text("x = 1\n")
+    (tmp_path / "src" / "BooklyClient" / "index.js").write_text("export {}\n", encoding="utf-8")
+    (tmp_path / "src" / "bookly_utils.py").write_text("x = 1\n", encoding="utf-8")
     paths = {f.path for f in make.sweep(str(tmp_path), BRAND) if f.line == 0}
     # each name is reported where it is, not again for everything beneath it
     assert paths == {"src/BooklyClient", "src/bookly_utils.py"}
@@ -215,19 +215,19 @@ def test_the_sweep_skips_what_is_not_the_product(tmp_path):
                 ".duet/state.json"):
         path = tmp_path / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("bookly #ff3366\n")
+        path.write_text("bookly #ff3366\n", encoding="utf-8")
     (tmp_path / "logo.png").write_bytes(b"\x89PNG\0bookly")
     (tmp_path / "blob.dat").write_bytes(b"\0\0bookly")
     assert make.sweep(str(tmp_path), BRAND) == []
 
 
 def test_sweep_stage_exits_1_while_dirty_and_0_when_clean(tmp_path):
-    (tmp_path / "app.py").write_text("booklyShelf = 1\n")
+    (tmp_path / "app.py").write_text("booklyShelf = 1\n", encoding="utf-8")
     assert main(["make", "--stage", "sweep", "-C", str(tmp_path),
                  "--like", "https://bookly.example"]) == 1
     # --like was remembered in make/brand.json; a later sweep needs no --like
     assert main(["make", "--stage", "sweep", "-C", str(tmp_path)]) == 1
-    (tmp_path / "app.py").write_text("shelf = 1\n")
+    (tmp_path / "app.py").write_text("shelf = 1\n", encoding="utf-8")
     assert main(["make", "--stage", "sweep", "-C", str(tmp_path)]) == 0
 
 
@@ -240,16 +240,16 @@ def test_the_sweep_ignores_neutral_colours_and_says_why(tmp_path, capsys):
     folder = tmp_path / "make"
     folder.mkdir()
     (folder / "brand.json").write_text(json.dumps(
-        {"avoid": [], "domains": [], "colors": GENERIC_PALETTE}))
+        {"avoid": [], "domains": [], "colors": GENERIC_PALETTE}), encoding="utf-8")
     (tmp_path / "style.css").write_text(
-        "body { background: #fff; color: #1E1E1E; }\n.card { background: #f5f5f5; }\n")
+        "body { background: #fff; color: #1E1E1E; }\n.card { background: #f5f5f5; }\n", encoding="utf-8")
     assert main(["make", "--stage", "sweep", "-C", str(tmp_path)]) == 0
     out = capsys.readouterr().out
     assert "ignored" in out and "neutral" in out
     for color in ("#1e1e1e", "#f5f5f5", "#ffffff"):
         assert color in out
     # the distinctive hue is still swept
-    (tmp_path / "accent.css").write_text("a { color: #7A5CF0; }\n")
+    (tmp_path / "accent.css").write_text("a { color: #7A5CF0; }\n", encoding="utf-8")
     assert main(["make", "--stage", "sweep", "-C", str(tmp_path)]) == 1
     assert "accent.css:1" in capsys.readouterr().out
 
@@ -263,18 +263,18 @@ def test_neutral_is_channels_within_a_small_tolerance(color, neutral):
 
 
 def test_the_build_veto_ignores_neutral_colours(tmp_path):
-    (tmp_path / "style.css").write_text("body { background: #ffffff; color: #1e1e1e; }\n")
+    (tmp_path / "style.css").write_text("body { background: #ffffff; color: #1e1e1e; }\n", encoding="utf-8")
     state = {"clean_room": {"avoid": [], "domains": [], "colors": GENERIC_PALETTE}}
     assert make.sweep_veto(str(tmp_path), state) is None
-    (tmp_path / "accent.css").write_text("a { color: #7a5cf0; }\n")
+    (tmp_path / "accent.css").write_text("a { color: #7a5cf0; }\n", encoding="utf-8")
     assert "accent.css" in make.sweep_veto(str(tmp_path), state)
 
 
 def test_brand_json_colours_are_swept(tmp_path):
     folder = tmp_path / "make"
     folder.mkdir()
-    (folder / "brand.json").write_text(json.dumps({"avoid": [], "domains": [], "colors": ["#00ff99"]}))
-    (tmp_path / "style.css").write_text("a { color: #0F9; }\n")
+    (folder / "brand.json").write_text(json.dumps({"avoid": [], "domains": [], "colors": ["#00ff99"]}), encoding="utf-8")
+    (tmp_path / "style.css").write_text("a { color: #0F9; }\n", encoding="utf-8")
     assert main(["make", "--stage", "sweep", "-C", str(tmp_path)]) == 1
 
 
@@ -307,7 +307,7 @@ def pin_mocks(root, reply, **fields):
         "agents": [{"name": "claude", "backend": "mock", "model": "", "options": spec},
                    {"name": "chatgpt", "backend": "mock", "model": "", "options": spec}],
         "start": "claude",
-    }))
+    }), encoding="utf-8")
 
 
 @pytest.fixture
@@ -322,7 +322,7 @@ def sessions(monkeypatch):
                      "web": [getattr(a, "web", False) for a in self.adapters.values()]})
         root = Path(cfg.root)
         if cfg.workflow == "plan":
-            (root / "PLAN.md").write_text("1. shared shelf\n2. reading goals\n")
+            (root / "PLAN.md").write_text("1. shared shelf\n2. reading goals\n", encoding="utf-8")
         else:
             product(root)
             write_ledger(root, csv_of(
@@ -349,8 +349,8 @@ def test_the_whole_pipeline_runs_in_order_and_only_recon_gets_the_web(tmp_path, 
                  "--like", "https://bookly.example", "--gate", gate])
     assert code == 0
     # recon wrote the ledger; the row with no source was dropped, not counted
-    assert (tmp_path / "make" / "recon.md").read_text().startswith("# Recon")
-    assert "#ff3366" in json.loads((tmp_path / "make" / "brand.json").read_text())["colors"]
+    assert (tmp_path / "make" / "recon.md").read_text(encoding="utf-8").startswith("# Recon")
+    assert "#ff3366" in json.loads((tmp_path / "make" / "brand.json").read_text(encoding="utf-8"))["colors"]
     # recon, then plan, then build, then parity
     assert [s["workflow"] for s in sessions] == ["plan", ""]
     assert sessions[0]["state"]["must_cover"] == ["shared shelf"]
@@ -402,7 +402,7 @@ def test_the_recon_prompt_asks_for_data_and_distinctive_hues():
 
 def test_a_dirty_product_stops_the_pipeline_at_the_sweep(tmp_path, sessions):
     pin_mocks(tmp_path, RECON_REPLY)
-    (tmp_path / "brand_assets.txt").write_text("made like Bookly\n")
+    (tmp_path / "brand_assets.txt").write_text("made like Bookly\n", encoding="utf-8")
     code = main(["make", "a shared reading list", "-C", str(tmp_path),
                  "--like", "https://bookly.example",
                  "--gate", "%s -c \"print('ok')\"" % sys.executable])
@@ -429,7 +429,7 @@ def test_plan_stage_hands_the_must_haves_to_the_plan_veto(tmp_path, sessions):
     # machine may have and CI does not.
     pin_mocks(tmp_path, RECON_REPLY)
     write_ledger(tmp_path, csv_of(("shared shelf", "a", "must", SOURCE, "todo", "", "")))
-    (tmp_path / "make" / "recon.md").write_text("# Recon\n")
+    (tmp_path / "make" / "recon.md").write_text("# Recon\n", encoding="utf-8")
     assert main(["make", "a reading list", "--stage", "plan", "-C", str(tmp_path)]) == 0
     assert [s["workflow"] for s in sessions] == ["plan"]
     assert sessions[0]["state"]["must_cover"] == ["shared shelf"]

@@ -39,7 +39,7 @@ DEFAULT_CANDIDATES = (
     "codex",
     "/opt/homebrew/bin/codex",
     "/usr/local/bin/codex",
-    str(Path.home() / ".local" / "bin" / "codex"),
+    os.path.expanduser(os.path.join("~", ".local", "bin", "codex")),   # not Path.home(): see claude_code
 )
 
 INSTALL_HINT = "npm install -g @openai/codex"
@@ -135,7 +135,7 @@ def state_dir() -> Path:
     DUET_STATE_DIR exists so tests never touch the real home directory.
     """
     override = os.environ.get("DUET_STATE_DIR")
-    return Path(override).expanduser() if override else Path.home() / ".duet"
+    return Path(os.path.expanduser(override or os.path.join("~", ".duet")))
 
 
 def parse_reset_at(message: str) -> Optional[float]:

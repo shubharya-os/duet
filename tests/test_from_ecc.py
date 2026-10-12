@@ -15,7 +15,7 @@ from duet import from_ecc
 def log(home, project_dir, name, entries):
     folder = home / ".claude" / "projects" / project_dir
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / name).write_text("".join(json.dumps(e) + "\n" for e in entries))
+    (folder / name).write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
 
 
 def agent_call(call_id, agent, cwd="/Users/me/code/Gallery-repo"):
@@ -69,17 +69,17 @@ def fake_cache(home):
     cache = home / ".claude" / "plugins" / "cache" / "ecc" / "ecc" / "2.2.2"
     (cache / "agents").mkdir(parents=True)
     (cache / "skills" / "go-patterns").mkdir(parents=True)
-    (cache / "LICENSE").write_text("MIT License\n\nCopyright (c) 2026 Someone\n")
+    (cache / "LICENSE").write_text("MIT License\n\nCopyright (c) 2026 Someone\n", encoding="utf-8")
     (cache / "agents" / "swift-reviewer.md").write_text(
-        "---\nname: swift-reviewer\ndescription: reviews swift\n---\n\nBody.\n")
-    (cache / "skills" / "go-patterns" / "SKILL.md").write_text("---\nname: go-patterns\n---\nx\n")
+        "---\nname: swift-reviewer\ndescription: reviews swift\n---\n\nBody.\n", encoding="utf-8")
+    (cache / "skills" / "go-patterns" / "SKILL.md").write_text("---\nname: go-patterns\n---\nx\n", encoding="utf-8")
     return cache
 
 
 def test_keep_copies_an_agent_with_its_licence_and_never_overwrites(tmp_path):
     fake_cache(tmp_path)
     ok, _ = from_ecc.keep(tmp_path, "swift-reviewer")
-    kept = (tmp_path / ".claude" / "agents" / "swift-reviewer.md").read_text()
+    kept = (tmp_path / ".claude" / "agents" / "swift-reviewer.md").read_text(encoding="utf-8")
     assert ok and kept.startswith("---\nname: swift-reviewer")      # front matter still first
     assert "MIT License, Copyright (c) 2026 Someone" in kept and "Body." in kept
     ok, message = from_ecc.keep(tmp_path, "swift-reviewer")
@@ -90,7 +90,7 @@ def test_keep_copies_a_skill_directory(tmp_path):
     fake_cache(tmp_path)
     ok, _ = from_ecc.keep(tmp_path, "go-patterns")
     assert ok and (tmp_path / ".claude" / "skills" / "go-patterns" / "SKILL.md").is_file()
-    assert "MIT" in (tmp_path / ".claude" / "skills" / "go-patterns" / "KEPT_FROM_ECC.md").read_text()
+    assert "MIT" in (tmp_path / ".claude" / "skills" / "go-patterns" / "KEPT_FROM_ECC.md").read_text(encoding="utf-8")
 
 
 def test_keep_says_so_when_there_is_nothing_to_keep(tmp_path):
@@ -104,10 +104,10 @@ def test_keep_says_so_when_there_is_nothing_to_keep(tmp_path):
 def test_the_report_never_uninstalls_and_lists_the_steps(tmp_path, capsys):
     fake_cache(tmp_path)
     (tmp_path / ".claude" / "plugins" / "installed_plugins.json").write_text(
-        json.dumps({"plugins": {"ecc@ecc": [{}]}}))
+        json.dumps({"plugins": {"ecc@ecc": [{}]}}), encoding="utf-8")
     log(tmp_path, "-p", "a.jsonl", [agent_call("t1", "ecc:swift-reviewer", cwd="/w/app")])
     assert from_ecc.run(argparse.Namespace(dir=str(tmp_path), keep=None)) == 0
     out = capsys.readouterr().out
     assert "duet from-ecc --keep swift-reviewer" in out
     assert "claude plugin uninstall ecc@ecc" in out and "you run this" in out
-    assert (tmp_path / ".claude" / "plugins" / "installed_plugins.json").read_text().count("ecc@ecc") == 1
+    assert (tmp_path / ".claude" / "plugins" / "installed_plugins.json").read_text(encoding="utf-8").count("ecc@ecc") == 1
