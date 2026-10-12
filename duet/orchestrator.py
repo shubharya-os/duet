@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import signal
+import sys
 import threading
 import time
 import uuid
@@ -18,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
-from duet import gate_cache, make, page, prompts, workflows
+from duet import __version__, gate_cache, make, page, prompts, workflows
 from duet.adapters import build as build_adapter
 from duet.adapters.base import (
     DEFAULT_TURN_TIMEOUT,
@@ -1031,6 +1032,10 @@ class Orchestrator:
             # alive, and how long a silence its limits allow.
             pid=os.getpid(),
             gate_timeout=cfg.gate_timeout,
+            # Which duet ran this, and from which install. A session launched
+            # by path from an old virtualenv otherwise looks like any other.
+            duet_version=__version__,
+            python=sys.executable,
         )
         previous = self._install_stop_handlers()
         try:
@@ -1323,6 +1328,7 @@ class Orchestrator:
                 if self.resumed_from else "",
             ),
             "**Workspace state:** `%s`" % result.digest[:8],
+            "**duet version:** %s" % __version__,
             "",
             "## Sign-off",
             "",

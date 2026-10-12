@@ -1645,6 +1645,32 @@ def _what_it_was_doing(events: List[Dict[str, Any]]) -> str:
     return "while starting up"
 
 
+# The first release whose session_start says which duet ran it. A record
+# without the field was written by something older than this.
+FIRST_RECORDED_VERSION = "0.14.0"
+
+
+def version_note(start: Dict[str, Any], running: bool) -> str:
+    """What to say about the duet a session ran on, or "" when it is this one.
+
+    A running session keeps the code it started with — whether it began before
+    an upgrade or was launched from an old install by path — so it is still the
+    other duet doing the work, and that is worth a warning. For a session that
+    is over, a recorded version that differs is a fact about its record; a
+    record with no version says nothing worth repeating on every line of a
+    listing that is mostly old sessions.
+    """
+    recorded = start.get("duet_version")
+    if recorded == __version__:
+        return ""
+    if running:
+        which = ("duet %s" % recorded if recorded
+                 else "an older duet (before %s)" % FIRST_RECORDED_VERSION)
+        return ("runs on %s (this is %s) — it finishes on the version it started with"
+                % (which, __version__))
+    return "ran on duet %s" % recorded if recorded else ""
+
+
 def classify_session(events: List[Dict[str, Any]], now: Optional[float] = None) -> Tuple[str, str]:
     """Running, finished or dead — from the event log and the process behind it.
 
@@ -1680,14 +1706,19 @@ def _print_recent_sessions(sessions: List[Path], root: str, limit: int = 8) -> N
     for path in sessions[-limit:]:
         events = _read_events(path)
         state, doing = classify_session(events)
+        start = next((e for e in events if e.get("kind") == "session_start"), {})
+        note = version_note(start, state == SESSION_RUNNING)
         if state == SESSION_FINISHED:
             end = next(e for e in events if e.get("kind") == "session_end")
             status = str(end.get("status"))
             shown = ui.green(status) if status == STATUS_CONSENSUS else ui.yellow(status)
+            shown += ui.dim(" — " + note) if note else ""
         elif state == SESSION_RUNNING:
             shown = ui.yellow("running") + ui.dim(" " + doing)
+            shown += "\n" + " " * 26 + ui.yellow(note) if note else ""
         else:
-            shown = ui.red(DEAD_LABEL) + ui.dim(" " + doing) + "\n" + " " * 26 + \
+            shown = ui.red(DEAD_LABEL) + ui.dim(" " + doing) \
+                + (ui.dim(" — " + note) if note else "") + "\n" + " " * 26 + \
                 ui.dim("resume: ") + ui.bold(resume_command(path.name, root))
         print("  %-24s %s" % (path.name, shown))
     print()
@@ -1768,6 +1799,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             "waiting_on": (last_event.get("agent") if running and last_event.get("kind") == "turn_start" else None),
             "seconds_since_last_event": age,
             "gate_ok": next((t.get("gate_ok") for t in reversed(turns)), None),
+            "duet_version": start.get("duet_version"),
         }, default=str))
         return 0 if not running and (end or {}).get("status") == STATUS_CONSENSUS else (0 if running else 1)
 
@@ -1786,14 +1818,21 @@ def cmd_status(args: argparse.Namespace) -> int:
         else:
             print("  " + ui.yellow("running") + "   round %s of %s — last event %dm %02ds ago"
                   % (round_no, start.get("max_rounds", "?"), age // 60, age % 60))
+        note = version_note(start, running=True)
+        if note:
+            print("  " + ui.yellow(note))
     elif dead:
+        note = version_note(start, running=False)
         print("  " + ui.red(DEAD_LABEL) + " " + doing
-              + ui.dim(" — last event %dm %02ds ago" % (age // 60, age % 60)))
+              + ui.dim(" — last event %dm %02ds ago" % (age // 60, age % 60))
+              + (ui.dim(" — " + note) if note else ""))
         print("  " + ui.dim("continue with: ") + ui.bold(str(resume)))
     else:
         status = (end or {}).get("status")
         mark = ui.green("finished") if status == STATUS_CONSENSUS else ui.yellow(str(status))
-        print("  " + mark + "  " + str((end or {}).get("reason") or ""))
+        note = version_note(start, running=False)
+        print("  " + mark + "  " + str((end or {}).get("reason") or "")
+              + (ui.dim(" — " + note) if note else ""))
 
     for agent in agents:
         last = next((t for t in reversed(turns) if t.get("agent") == agent), None)
@@ -2245,6 +2284,13 @@ def cmd_resume(args: argparse.Namespace) -> int:
              "differently;", "start a fresh session with:  duet run \"...\""],
             session=path.name,
         )
+    # The rounds already taken ran on the duet that recorded them; the rest run
+    # on this one. A record from before versions were recorded names none.
+    recorded = next((e for e in _read_events(path) if e.get("kind") == "session_start"),
+                    {}).get("duet_version")
+    if recorded and recorded != __version__:
+        notes.append("session %s ran on duet %s; the rest of the session runs on this "
+                     "version, duet %s" % (path.name, recorded, __version__))
     open_issues = orch.state.open_issues()
 
     if as_json:

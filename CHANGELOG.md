@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- A session's record says which duet ran it. `session_start` now carries
+  `duet_version` and `python` (the interpreter, so which install), and a
+  resumed session records them on its own `session_start`. The report's header
+  names the duet version that wrote it. On one machine, sessions in several
+  projects had been running an install five releases old, launched by path
+  from an old virtualenv, and nothing showed it.
+- `duet status` says when a running session is on another duet than the one
+  answering: "runs on duet 0.8.0 (this is 0.14.0) — it finishes on the version
+  it started with", whether it began before an upgrade or was launched from an
+  old install by path. A running record with no version is "an older duet
+  (before 0.14.0)". Finished and dead sessions name a recorded version that
+  differs, without the warning; a finished record with no version adds
+  nothing to its line. `--json` carries `duet_version`.
+- `duet resume` of a session recorded by another version says, in one line,
+  that the rest of the session runs on this one.
+- Records from before this still load in status, resume and the report.
+
 ## 0.13.0
 
 - `--detach` works on Windows. It used to exit 3. The session now starts as a
