@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.0
 
 - Fixed: the 11 tests still failing on windows-latest after the first round.
   - duet's own output is now UTF-8 on every platform. A Windows pipe or
