@@ -1235,7 +1235,7 @@ def _npm_global_bin() -> Optional[str]:
         out = (proc.stdout or "").strip()
         if proc.returncode == 0 and out:
             path = out.splitlines()[-1].strip()
-            return str(Path(path) / suffix) if suffix else path
+            return str(Path(path) / suffix) if suffix else str(Path(path))
     return None
 
 
