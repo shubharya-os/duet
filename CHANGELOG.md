@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.0
 
 - `--detach` works on Windows. It used to exit 3. The session now starts as a
   new process with `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`, inherits no
