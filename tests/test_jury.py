@@ -53,8 +53,8 @@ def objection(quote, severity="blocker", path="README.md", oid="no-pricing", wal
 
 def project(tmp_path, command="%s -c \"print('ledger ready')\"" % sys.executable):
     tmp_path.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "README.md").write_text(README.format(command=command))
-    (tmp_path / "ledger.py").write_text("def total(rows):\n    return sum(rows)\n")
+    (tmp_path / "README.md").write_text(README.format(command=command), encoding="utf-8")
+    (tmp_path / "ledger.py").write_text("def total(rows):\n    return sum(rows)\n", encoding="utf-8")
     return tmp_path
 
 
@@ -79,14 +79,14 @@ def pin(tmp_path, script=None, peer_script=None, writes=None, error=None):
         "start": "claude",
     }
     (tmp_path / ".duet").mkdir(exist_ok=True)
-    (tmp_path / ".duet" / "config.json").write_text(json.dumps(cfg))
+    (tmp_path / ".duet" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
     return tmp_path
 
 
 def sit(tmp_path, *extra):
     out = tmp_path / ".duet" / "out" / "JURY.md"
     code = main(["jury", "-C", str(tmp_path), "--out", str(out), *extra])
-    return code, (out.read_text() if out.exists() else "")
+    return code, (out.read_text(encoding="utf-8") if out.exists() else "")
 
 
 # -- personas and the config format -----------------------------------------
@@ -100,7 +100,7 @@ def test_the_default_panel_is_the_five_stakeholders():
 def test_a_custom_persona_joins_the_panel(tmp_path):
     (tmp_path / jury.JURY_CONFIG).write_text(json.dumps({"personas": [
         {"name": "ops-lead", "role": "runs a small warehouse team",
-         "cares_about": "setup time", "decision": "Would you roll this out?"}]}))
+         "cares_about": "setup time", "decision": "Would you roll this out?"}]}), encoding="utf-8")
     config = jury.load_config(str(tmp_path))
     assert config.names()[-1] == "ops-lead"
     assert [p.name for p in jury.choose_panel(config, "ops-lead,user")] == ["ops-lead", "user"]
@@ -145,7 +145,7 @@ def test_an_invented_quote_is_unverified(tmp_path):
 
 def test_a_quote_from_outside_the_workspace_is_unverified(tmp_path):
     inside = project(tmp_path / "proj")
-    (tmp_path / "secret.txt").write_text("a quote that lives outside the project")
+    (tmp_path / "secret.txt").write_text("a quote that lives outside the project", encoding="utf-8")
     found = jury.verify(jury.Objection("a", "t", "blocker", path="../secret.txt",
                                        quote="a quote that lives outside"), str(inside))
     assert not found.verified
@@ -214,7 +214,7 @@ def test_the_report_has_the_panel_summary(tmp_path):
 
 def test_a_bad_config_exits_3(tmp_path):
     pin(project(tmp_path), script=[juror()])
-    (tmp_path / jury.JURY_CONFIG).write_text(json.dumps({"persona": []}))
+    (tmp_path / jury.JURY_CONFIG).write_text(json.dumps({"persona": []}), encoding="utf-8")
     assert sit(tmp_path)[0] == 3
 
 
@@ -279,15 +279,15 @@ def test_stage_is_idea_for_an_empty_workspace_with_an_idea(tmp_path):
 
 
 def test_stage_is_plan_when_there_is_a_plan_and_little_code(tmp_path):
-    (tmp_path / "PLAN.md").write_text("# Plan\n")
-    (tmp_path / "main.py").write_text("")
+    (tmp_path / "PLAN.md").write_text("# Plan\n", encoding="utf-8")
+    (tmp_path / "main.py").write_text("", encoding="utf-8")
     assert jury.detect_stage(str(tmp_path)) == "plan"
 
 
 def test_stage_is_build_once_there_is_code(tmp_path):
-    (tmp_path / "PLAN.md").write_text("# Plan\n")
+    (tmp_path / "PLAN.md").write_text("# Plan\n", encoding="utf-8")
     for name in ("a.py", "b.py", "c.py"):
-        (tmp_path / name).write_text("")
+        (tmp_path / name).write_text("", encoding="utf-8")
     assert jury.detect_stage(str(tmp_path)) == "build"
     assert jury.detect_stage(str(project(tmp_path / "p"))) == "build"
 
@@ -299,9 +299,9 @@ def test_the_idea_stage_needs_the_idea(tmp_path):
 
 def test_launch_shows_the_jurors_pricing_and_landing_page(tmp_path):
     project(tmp_path)
-    (tmp_path / "pricing.md").write_text("Household plan: four coins a month.\n")
+    (tmp_path / "pricing.md").write_text("Household plan: four coins a month.\n", encoding="utf-8")
     (tmp_path / "site").mkdir()
-    (tmp_path / "site" / "index.html").write_text("<h1>Budget calmly</h1>")
+    (tmp_path / "site" / "index.html").write_text("<h1>Budget calmly</h1>", encoding="utf-8")
     _, bodies = jury._material(str(tmp_path), "launch")
     assert "pricing.md" in bodies and "site/index.html" in bodies
     _, plan_bodies = jury._material(str(tmp_path), "plan")
@@ -335,13 +335,13 @@ def test_the_user_juror_is_shown_the_walkthrough_and_can_quote_it(tmp_path):
     code, report = sit(tmp_path, "--panel", "user")
     assert code == 1
     assert "budget.txt not found" in report.split("## User walkthrough")[1]
-    prompt_seen = json.loads((tmp_path / ".duet" / "config.json").read_text())
+    prompt_seen = json.loads((tmp_path / ".duet" / "config.json").read_text(encoding="utf-8"))
     assert prompt_seen   # the config is untouched by the walkthrough
 
 
 def test_the_user_juror_is_shown_the_website_walkthrough(monkeypatch, tmp_path):
     project(tmp_path, command="")
-    (tmp_path / "index.html").write_text("<h1>Household ledger</h1>")
+    (tmp_path / "index.html").write_text("<h1>Household ledger</h1>", encoding="utf-8")
     shots_dir = tmp_path / ".duet" / "shots"
     seen = {}
 
@@ -381,7 +381,7 @@ def test_the_user_juror_is_shown_the_website_walkthrough(monkeypatch, tmp_path):
 
 
 def test_no_run_command_is_itself_reported(tmp_path):
-    (tmp_path / "ledger.py").write_text("x = 1\n")
+    (tmp_path / "ledger.py").write_text("x = 1\n", encoding="utf-8")
     walk = jury.walkthrough(str(tmp_path), jury.run_command_for(str(tmp_path)))
     assert not walk.ran and "no run command found" in walk.transcript()
 
@@ -422,7 +422,7 @@ def test_a_verified_blocker_reopens_the_session_as_an_issue(tmp_path):
     assert result.status == "consensus"
     assert len(sat) == 1
     assert (Path(result.session_dir) / "JURY.md").is_file()
-    assert "## Jury" in Path(result.report).read_text()
+    assert "## Jury" in Path(result.report).read_text(encoding="utf-8")
 
 
 def test_the_jury_sits_at_most_twice(tmp_path):
@@ -431,7 +431,7 @@ def test_the_jury_sits_at_most_twice(tmp_path):
     assert len(sat) == 2
     assert orch.config.jury_convened == 2
     assert result.status == "consensus"
-    report = Path(result.report).read_text()
+    report = Path(result.report).read_text(encoding="utf-8")
     assert "cap of 2 reached" in report
 
 
@@ -445,7 +445,7 @@ def test_without_jury_nothing_changes(tmp_path):
     orch, result, sat = session(tmp_path, [DONE], [DONE], [BLOCKER], jury_on=False)
     assert result.status == "consensus" and sat == []
     assert not (Path(result.session_dir) / "JURY.md").exists()
-    assert "## Jury" not in Path(result.report).read_text()
+    assert "## Jury" not in Path(result.report).read_text(encoding="utf-8")
     assert result.rounds == 2
 
 
@@ -456,7 +456,7 @@ def test_panel_without_jury_is_refused(tmp_path):
 
 def test_a_bad_jury_config_stops_the_session_before_it_starts(tmp_path):
     project(tmp_path)
-    (tmp_path / jury.JURY_CONFIG).write_text(json.dumps({"personas": [{"name": "x"}]}))
+    (tmp_path / jury.JURY_CONFIG).write_text(json.dumps({"personas": [{"name": "x"}]}), encoding="utf-8")
     assert main(["run", "-C", str(tmp_path), "--no-gate", "--jury", "--pair", "mock+mock",
                  "x"]) == 3
     assert not (tmp_path / ".duet" / "sessions").exists()

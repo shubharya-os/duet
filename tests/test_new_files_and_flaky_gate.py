@@ -18,6 +18,7 @@ must fail there on what they assert, not on an ImportError for a new name.
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 from duet.adapters.mock import MockAdapter, envelope
@@ -29,31 +30,31 @@ DONE = envelope("I would ship this", "DONE", confidence=0.9)
 
 
 def git(root, *args):
-    return subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True)
+    return subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8")
 
 
 def repo(root, lines=3000):
     git(root, "init", "-q")
     git(root, "config", "user.email", "t@example.com")
     git(root, "config", "user.name", "t")
-    (root / "big.py").write_text("".join("line_%d = %d\n" % (i, i) for i in range(lines)))
+    (root / "big.py").write_text("".join("line_%d = %d\n" % (i, i) for i in range(lines)), encoding="utf-8")
     git(root, "add", "-A")
     git(root, "commit", "-qm", "base")
 
 
 def edit_tracked(root):
     """A tracked change far bigger than the whole 12,000-character view."""
-    (root / "big.py").write_text("".join("line_%d = %d  # edited\n" % (i, i) for i in range(3000)))
+    (root / "big.py").write_text("".join("line_%d = %d  # edited\n" % (i, i) for i in range(3000)), encoding="utf-8")
 
 
 # -- 1. new files are always named, and their text is shown ------------------
 def test_new_files_survive_a_diff_that_fills_the_budget(tmp_path):
     repo(tmp_path)
     edit_tracked(tmp_path)
-    (tmp_path / "gate_cache.py").write_text("def recall():\n    return 'REMEMBERED-PASS'\n")
+    (tmp_path / "gate_cache.py").write_text("def recall():\n    return 'REMEMBERED-PASS'\n", encoding="utf-8")
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "test_gate_cache.py").write_text(
-        "def test_recall():\n    assert recall() == 'REMEMBERED-PASS'  # NEW-TEST-BODY\n")
+        "def test_recall():\n    assert recall() == 'REMEMBERED-PASS'  # NEW-TEST-BODY\n", encoding="utf-8")
 
     view = Workspace(str(tmp_path)).diff()
 
@@ -80,7 +81,7 @@ def test_the_diff_and_the_new_files_share_the_budget(tmp_path):
     repo(tmp_path)
     edit_tracked(tmp_path)
     (tmp_path / "feature.py").write_text(
-        "FEATURE_START = 1\n" + "".join("def f%d():\n    return %d\n" % (i, i) for i in range(2000)))
+        "FEATURE_START = 1\n" + "".join("def f%d():\n    return %d\n" % (i, i) for i in range(2000)), encoding="utf-8")
 
     view = Workspace(str(tmp_path)).diff()
 
@@ -97,8 +98,8 @@ def test_the_diff_and_the_new_files_share_the_budget(tmp_path):
 def test_binary_and_very_large_new_files_are_listed_not_inlined(tmp_path):
     repo(tmp_path)
     (tmp_path / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\0\0\0BINARY-MARKER")
-    (tmp_path / "dump.json").write_text('{"x": "' + "LARGE-MARKER" * 30000 + '"}')
-    (tmp_path / "small.py").write_text("SMALL = 1\n")
+    (tmp_path / "dump.json").write_text('{"x": "' + "LARGE-MARKER" * 30000 + '"}', encoding="utf-8")
+    (tmp_path / "small.py").write_text("SMALL = 1\n", encoding="utf-8")
 
     view = Workspace(str(tmp_path)).diff()
 
@@ -116,7 +117,7 @@ def test_a_tight_view_shows_whole_pieces_and_names_the_rest(tmp_path):
     edit_tracked(tmp_path)
     names = ["mod_%02d.py" % i for i in range(30)]
     for name in names:
-        (tmp_path / name).write_text(("%s_VALUE = 1\n" % name[:-3]) * 30)
+        (tmp_path / name).write_text(("%s_VALUE = 1\n" % name[:-3]) * 30, encoding="utf-8")
 
     view = Workspace(str(tmp_path)).diff(limit=4000)
 
@@ -136,12 +137,12 @@ def test_a_tight_view_shows_whole_pieces_and_names_the_rest(tmp_path):
 
 def test_a_renamed_file_is_named_by_its_new_path(tmp_path):
     repo(tmp_path)
-    (tmp_path / "old_name.py").write_text("X = 1\n")
+    (tmp_path / "old_name.py").write_text("X = 1\n", encoding="utf-8")
     git(tmp_path, "add", "old_name.py")
     git(tmp_path, "commit", "-qm", "add")
     git(tmp_path, "mv", "old_name.py", "new_name.py")
     edit_tracked(tmp_path)
-    (tmp_path / "extra.py").write_text("EXTRA = 1\n" * 2000)
+    (tmp_path / "extra.py").write_text("EXTRA = 1\n" * 2000, encoding="utf-8")
 
     view = Workspace(str(tmp_path)).diff()
 
@@ -153,8 +154,8 @@ def test_a_renamed_file_is_named_by_its_new_path(tmp_path):
 
 def test_a_view_with_room_for_everything_is_not_marked_trimmed(tmp_path):
     repo(tmp_path, lines=3)
-    (tmp_path / "big.py").write_text("changed = True\n")
-    (tmp_path / "new.py").write_text("NEW = 1\n")
+    (tmp_path / "big.py").write_text("changed = True\n", encoding="utf-8")
+    (tmp_path / "new.py").write_text("NEW = 1\n", encoding="utf-8")
     view = Workspace(str(tmp_path)).diff()
     assert "NEW = 1" in view and "+changed = True" in view
     assert "NOT SHOWN IN FULL" not in view
@@ -178,25 +179,37 @@ def session(tmp_path, gate, script=(DONE,), peer=(DONE,), **kwargs):
 
 def events(result):
     path = Path(result.session_dir) / "events.jsonl"
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def python_gate(tmp_path, body):
+    """A gate that runs `body` as Python: the same command under sh and cmd.exe."""
+    script = tmp_path / "gate_script.py"
+    script.write_text("import os, sys, time\n" + body + "\n", encoding="utf-8")
+    return '"%s" "%s"' % (sys.executable, script)
+
+
+def counting(runs):
+    return "open(%r, 'a').write('run\\n')\n" % str(runs)
 
 
 def flaky_gate(tmp_path, first):
-    """Does `first` the first time it runs, passes every time after. The
-    counter lives outside the workspace, so the files never change."""
+    """Does `first` (Python) the first time it runs, passes every time after.
+    The counter lives outside the workspace, so the files never change."""
     marker = tmp_path / "ran-once"
     runs = tmp_path / "runs"
-    return ("echo run >> %s; if [ -f %s ]; then exit 0; fi; touch %s; %s"
-            % (runs, marker, marker, first)), runs
+    return python_gate(tmp_path, counting(runs) + (
+        "if os.path.exists(%r):\n    sys.exit(0)\nopen(%r, 'w').close()\n%s"
+        % (str(marker), str(marker), first))), runs
 
 
 def test_a_gate_that_failed_once_is_re_run_and_the_pass_is_called_flaky(tmp_path):
     gate, runs = flaky_gate(
-        tmp_path, "echo 'FAILED tests/test_page_chrome.py::test_real_chrome - Timeout'; exit 1")
+        tmp_path, "print('FAILED tests/test_page_chrome.py::test_real_chrome - Timeout'); sys.exit(1)")
     orch, result = session(tmp_path, gate)
 
     assert result.status == "consensus", result.reason
-    assert len(runs.read_text().splitlines()) == 2          # one re-run, no more
+    assert len(runs.read_text(encoding="utf-8").splitlines()) == 2          # one re-run, no more
     note = result.gate.headline()
     assert "failed once and passed on a re-run with no file changes" in note
     assert "possibly flaky" in note
@@ -209,18 +222,20 @@ def test_a_gate_that_failed_once_is_re_run_and_the_pass_is_called_flaky(tmp_path
 
 def test_a_failure_that_repeats_is_a_failure(tmp_path):
     runs = tmp_path / "runs"
-    orch, result = session(tmp_path, "echo run >> %s; exit 1" % runs, max_rounds=4)
+    orch, result = session(tmp_path, python_gate(tmp_path, counting(runs) + "sys.exit(1)"),
+                           max_rounds=4)
 
     assert result.status != "consensus"
     assert not result.gate.ok
     assert result.gate.headline().startswith("FAILED")
     # Re-run once for the unchanged state, then believed: not once per turn.
-    assert len(runs.read_text().splitlines()) == 2
+    assert len(runs.read_text(encoding="utf-8").splitlines()) == 2
 
 
 def test_a_gate_that_timed_out_is_re_run_and_keeps_its_wording(tmp_path):
-    gate, runs = flaky_gate(tmp_path, "exec sleep 30")
-    orch, result = session(tmp_path, gate, gate_timeout=2)
+    gate, runs = flaky_gate(tmp_path, "time.sleep(30)")
+    # Long enough for a Python start on a loaded machine; the first run sleeps 30.
+    orch, result = session(tmp_path, gate, gate_timeout=5)
 
     assert result.status == "consensus", result.reason
     note = result.gate.headline()

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from fakebin import fake_cli
 from duet import chrome
 from duet.adapters.mock import envelope
 from duet.cli import build_parser, main
@@ -152,11 +153,7 @@ def test_login_accepts_every_name_for_the_chatgpt_side():
 
 
 def _fake_bin(tmp_path, name, body):
-    path = tmp_path / "bin" / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/bin/sh\n" + body + "\n")
-    path.chmod(path.stat().st_mode | stat.S_IEXEC)
-    return str(path)
+    return fake_cli(tmp_path / "bin", name, body + "\n", shebang="#!/bin/sh")
 
 
 @pytest.mark.parametrize("side", ["gpt", "chatgpt", "codex"])
@@ -205,7 +202,7 @@ def _fake_chrome(tmp_path, delay):
         "        time.sleep(%r)\n"
         "        os.write(4, json.dumps({'id': msg['id'], 'result': {'product': 'Slow/1'}}).encode() + b'\\0')\n"
         % (sys.executable, delay)
-    )
+    , encoding="utf-8")
     path.chmod(0o755)
     return str(path)
 
@@ -227,13 +224,13 @@ def test_a_chrome_slower_than_its_allowance_gets_a_second_longer_wait(tmp_path, 
 @pytest.mark.skipif(sys.platform.startswith("win"), reason="the pipe protocol needs fds 3 and 4")
 def test_a_chrome_that_never_starts_is_still_a_setup_fault(tmp_path, monkeypatch, capsys):
     dead = tmp_path / "dead-chrome"
-    dead.write_text("#!/bin/sh\nexit 1\n")
+    dead.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
     dead.chmod(0o755)
     monkeypatch.setattr(chrome, "START_TIMEOUT", 0.6)
     with pytest.raises(chrome.SetupError):
         chrome.Browser(chrome=str(dead), timeout=0.6)
 
     page = tmp_path / "index.html"
-    page.write_text("<!doctype html><title>x</title><p>hi</p>")
+    page.write_text("<!doctype html><title>x</title><p>hi</p>", encoding="utf-8")
     monkeypatch.setenv("DUET_CHROME", str(dead))
     assert main(["page", "check", str(page)]) == 3

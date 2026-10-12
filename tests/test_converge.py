@@ -35,7 +35,7 @@ def session(tmp_path, claude, gpt, reporter=None, max_rounds=10):
 
 def events(result, kind):
     path = Path(result.session_dir) / "events.jsonl"
-    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     return [r for r in rows if r.get("kind") == kind]
 
 
@@ -78,7 +78,7 @@ def test_a_polishing_pair_agrees_in_the_turn_after_the_first_done(tmp_path):
     assert result.rounds == first_done_round(orch) + 1
     # The polish was not lost: it is open, and the report lists it to do later.
     assert orch.state.issues["polish-gpt"].status == "open"
-    report = Path(result.report).read_text()
+    report = Path(result.report).read_text(encoding="utf-8")
     assert "## Left for later" in report
     later = report.split("## Left for later", 1)[1]
     assert "polish-gpt" in later and "say hello, not hi" in later
@@ -139,7 +139,7 @@ def test_a_blocking_objection_with_an_edit_still_reopens_the_session(tmp_path):
     assert not events(result, "agreement_restarted")
     assert result.status == "consensus" and result.rounds > 2
     assert orch.state.issues["greeting-crash"].status == "resolved"
-    assert "## Left for later" not in Path(result.report).read_text()
+    assert "## Left for later" not in Path(result.report).read_text(encoding="utf-8")
 
 
 def test_the_owed_notice_survives_a_resume(tmp_path):
@@ -147,7 +147,7 @@ def test_the_owed_notice_survives_a_resume(tmp_path):
                       patches=[{"path": "app.py", "content": "print('hello')\n"}])
     orch, result = session(tmp_path, [BUILD], [polish], max_rounds=2)
     assert result.status == "exhausted"
-    saved = json.loads((Path(result.session_dir) / "state.json").read_text())
+    saved = json.loads((Path(result.session_dir) / "state.json").read_text(encoding="utf-8"))
     assert "app.py" in saved["pending_restarted"]["claude"]
 
     cfg = Config(task="build the thing", root=str(tmp_path),

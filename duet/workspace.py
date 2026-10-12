@@ -272,7 +272,7 @@ class Workspace:
                 ["git", *args],
                 cwd=str(self.root),
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 timeout=60,
             )
         except (OSError, subprocess.SubprocessError) as exc:
@@ -574,7 +574,7 @@ class Workspace:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 env={**os.environ, "DUET_GATE": "1"},
                 start_new_session=os.name == "posix",
             )
@@ -616,14 +616,38 @@ def stop_process_group(proc: "subprocess.Popen[str]", grace: float = 3.0) -> Non
 
     SIGTERM to the group first so a test runner can clean up, SIGKILL if it is
     still there after `grace` seconds. Where the group cannot be signalled
-    (Windows, or a sandbox that refuses killpg) the child alone is stopped.
+    (a sandbox that refuses killpg) the child alone is stopped.
+
+    Windows has no process groups to signal, and under `shell=True` the child
+    is cmd.exe: stopping only it left the test runner it started running and
+    holding the output pipes, so reading them after a timeout waited for the
+    whole suite anyway. `taskkill /T` stops the tree.
     """
+    if os.name == "nt":
+        try:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            pass
+        return
     try:
         if os.name == "posix":
             os.killpg(proc.pid, signal.SIGTERM)
         else:
             proc.terminate()
-    except OSError:
+    except (OSError, AttributeError):
+        # AttributeError: a "posix" os.name with no os.killpg at all —
+        # exercised by the test suite, not a real platform, but the same
+        # mistake as the Windows one this function exists to fix, so it
+        # gets the same fallback rather than a crash.
         try:
             proc.terminate()
         except OSError:
@@ -637,7 +661,7 @@ def stop_process_group(proc: "subprocess.Popen[str]", grace: float = 3.0) -> Non
             os.killpg(proc.pid, signal.SIGKILL)
         else:
             proc.kill()
-    except OSError:
+    except (OSError, AttributeError):
         try:
             proc.kill()
         except OSError:

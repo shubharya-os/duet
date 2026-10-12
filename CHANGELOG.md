@@ -1,5 +1,88 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: the 11 tests still failing on windows-latest after the first round.
+  - duet's own output is now UTF-8 on every platform. A Windows pipe or
+    redirect defaults to cp1252, which has no `─`, `✓`, `✗` or `→`, so
+    `duet demo | ...` (and any agent capturing duet's output) died on its first
+    line with `UnicodeEncodeError`. stdout and stderr are reconfigured to UTF-8
+    with `errors="replace"` at startup.
+  - importing the Claude Code and Codex adapters called `Path.home()`, which
+    raises where no home directory is known (Windows without `USERPROFILE`),
+    so every duet command failed before it started. Those candidate paths now
+    use `os.path.expanduser`, which leaves `~` alone instead of raising; so
+    does the codex quota note's `~/.duet` state directory.
+  - `npm prefix -g` names the directory npm's global commands are in on
+    Windows; duet appended `bin`, which exists only on Unix.
+  - the test suite itself read and wrote text in the platform default
+    encoding (the first round's scan covered `duet/` only), so on Windows it
+    read duet's UTF-8 files back as cp1252 and saw "â€”" for "—". Every text
+    read, write and `text=True` pipe in `tests/` now names UTF-8, and the scan
+    covers `tests/` too.
+  - tests that assumed POSIX now follow the platform: the starter gate's
+    quoting is checked for both sh and cmd.exe; two workflow gates written as
+    `test "$(cat f)" = ...` (sh only: cmd.exe never expands `$(...)`, so the
+    gate gave the same answer every time) are now Python one-liners that mean
+    the same in both shells; `duet skill install` is checked for the rendered
+    command rather than the literal `duet run` (on Windows the invocation is
+    `...\duet.EXE`); the npm fallback test no longer assumes `argv[1]` survives
+    Windows' shim resolution.
+- Fixed: duet did not work on Windows (129 tests failed on windows-latest).
+  - every subprocess duet reads text from now decodes it as UTF-8 (with
+    `errors="replace"`), not the platform default, which is cp1252 on Windows;
+    the last two config reads that named no encoding now say UTF-8 too.
+  - an agent CLI installed by npm on Windows is a `.cmd` shim, which
+    CreateProcess cannot run ("[WinError 193] %1 is not a valid Win32
+    application"). duet now resolves the command with `shutil.which` and, for a
+    shim that forwards `%*` to a program (what npm writes), starts that program
+    directly — no cmd.exe, so a multi-line prompt arrives whole. Any other batch
+    file goes through `cmd.exe /d /s /c` with every argument escaped, and a
+    multi-line argument, which cmd cannot carry, is refused with a clear error.
+  - a CLI that is found but cannot be started is reported as a failed turn
+    instead of crashing the session.
+  - `.gitattributes` keeps text files LF on every checkout, so `install.sh` no
+    longer stops with "set: Illegal option -" under a Windows checkout.
+  - every command duet builds as a shell string — the gate it detects, the
+    `/duet` invocation it writes into skill files — is quoted for the shell
+    it will actually run through: `shlex.quote` wraps any path with a
+    backslash in single quotes, which cmd.exe does not understand as quoting
+    at all, so a detected virtualenv's pytest came back as a program literally
+    named `'C:\...\pytest.exe'`, quote marks included. A new
+    `duet.winlaunch.quote_for_shell` picks cmd.exe's own rules on Windows.
+  - the one place duet still assembled `PYTHONPATH=<path> <python> -m duet` —
+    POSIX's `VAR=value` prefix, which cmd.exe rejects ("'PYTHONPATH' is not
+    recognized...") — as a fallback invocation now, on Windows, sets no
+    variable at all: `<python> -c "..."` puts the package on `sys.path`
+    itself. One double-quoted argument reads the same in cmd.exe, Git Bash
+    and PowerShell, which matters because duet checks the line through cmd
+    but an agent runs it through its own shell.
+  - `jury.walkthrough`'s stuck-process cleanup called `os.killpg`, which does
+    not exist on Windows (`AttributeError`, not the `OSError` it was ready
+    for) — it now falls back to killing just the process on either error.
+  - `--detach` on Windows now exits 3, the code this project uses throughout
+    for "the platform cannot do this" (`duet page` already does), not 2,
+    which means a bad argument.
+  - the check that a gate's program exists split the gate the POSIX way,
+    which reads a backslash as an escape: on Windows `C:\...\python.exe -m
+    pytest` became `C:...python.exe`, and every session with an interpreter-
+    path gate was refused before it started. It now splits as cmd.exe does.
+  - a gate that ran out of time on Windows was stopped by stopping cmd.exe
+    alone; the test runner under it kept running and holding the output, so
+    duet still waited for the whole suite. The process tree is now stopped
+    with `taskkill /T /F`.
+  - the test suite's fake CLIs come from one helper (`tests/fakebin.py`): on
+    Windows each is the script plus an npm-shaped `.cmd` shim forwarding to
+    Git for Windows' bash, so the tests go through the same launcher a real
+    npm-installed CLI does. install.sh's tests and the fakes of POSIX
+    virtualenv binaries are skipped on Windows, with the reason.
+  - `duet jury`'s user-walkthrough timeout had the same process-tree problem
+    as the gate timeout above — stopping only the shell, not what it
+    started — and now reuses the same `stop_process_group` fix instead of a
+    second, narrower one of its own.
+  - `duet demo`'s gate was still built with `shlex.quote`, the same quoting
+    bug as the detected gate above, in the one place it had been missed.
+
 ## 0.11.0
 
 - Fixed: `/duet running` from the skill waited on a permission prompt before it could

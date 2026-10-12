@@ -34,7 +34,7 @@ CLEAN = envelope("Read it against the task; it does what was asked and the edges
 
 # -- workspace fixtures ----------------------------------------------------
 def git(tmp_path, *args):
-    return subprocess.run(["git", *args], cwd=str(tmp_path), capture_output=True, text=True)
+    return subprocess.run(["git", *args], cwd=str(tmp_path), capture_output=True, text=True, encoding="utf-8")
 
 
 def repo(tmp_path, changed=True):
@@ -42,13 +42,13 @@ def repo(tmp_path, changed=True):
     git(tmp_path, "init", "-q")
     git(tmp_path, "config", "user.email", "t@example.com")
     git(tmp_path, "config", "user.name", "t")
-    (tmp_path / "loader.py").write_text("def load(path):\n    return open(path).read()\n")
+    (tmp_path / "loader.py").write_text("def load(path):\n    return open(path).read()\n", encoding="utf-8")
     git(tmp_path, "add", "-A")
     git(tmp_path, "commit", "-qm", "first")
     if changed:
         (tmp_path / "loader.py").write_text(
             "import os\n\ndef load(path):\n    return open(path).read().splitlines()[1:]\n"
-        )
+        , encoding="utf-8")
     return tmp_path
 
 
@@ -70,7 +70,7 @@ def pin(tmp_path, script=None, error=None, writes=None, backend="mock",
         "start": peer,
     }
     (tmp_path / ".duet").mkdir(exist_ok=True)
-    (tmp_path / ".duet" / "config.json").write_text(json.dumps(cfg))
+    (tmp_path / ".duet" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
     if (tmp_path / ".git").is_dir():
         # config.json travels with the repo, so a real workspace has it committed.
         # Leaving it untracked would show up as part of the change under review.
@@ -249,7 +249,7 @@ def test_the_task_falls_back_to_the_last_recorded_session(tmp_path, capsys):
     session = root / ".duet" / "sessions" / "20260101-000000-aaaa"
     session.mkdir(parents=True)
     (session / "state.json").write_text(json.dumps(
-        {"config": {"task": "port the CSV loader to streaming", "acceptance": "pytest passes"}}))
+        {"config": {"task": "port the CSV loader to streaming", "acceptance": "pytest passes"}}), encoding="utf-8")
 
     code, data = review_json(root, capsys)
     assert data["task"] == "port the CSV loader to streaming"
@@ -271,7 +271,7 @@ def test_no_task_anywhere_is_still_a_review(tmp_path, capsys):
 
 def test_a_non_git_directory_is_reviewed_as_a_file_listing(tmp_path, capsys):
     pin(tmp_path, script=[CLEAN])
-    (tmp_path / "thing.py").write_text("x = 1\n")
+    (tmp_path / "thing.py").write_text("x = 1\n", encoding="utf-8")
     code, data = review_json(tmp_path, capsys)
     assert code == 0 and data["git"] is False and data["reviewed"] is True
 
@@ -344,7 +344,7 @@ def test_a_new_file_is_sent_with_its_contents_not_just_its_name(tmp_path, capsys
     """A new module and its tests is the commonest change there is, and it
     appears in no diff. A reviewer given only the filename reviews nothing."""
     root = pin(repo(tmp_path), script=[CLEAN])
-    (root / "brand_new.py").write_text("def added_later():\n    return 'the body of a new file'\n")
+    (root / "brand_new.py").write_text("def added_later():\n    return 'the body of a new file'\n", encoding="utf-8")
 
     _, prompt = sent_prompt(root)
     assert "=== NEW FILE: brand_new.py ===" in prompt
@@ -361,7 +361,7 @@ def test_an_incomplete_view_says_which_kind_it_was(tmp_path, capsys):
 
     root = pin(repo(tmp_path), script=[CLEAN])
     for n in range(NEW_FILE_COUNT + 3):
-        (root / ("extra_%02d.py" % n)).write_text("x = %d\n" % n)
+        (root / ("extra_%02d.py" % n)).write_text("x = %d\n" % n, encoding="utf-8")
 
     code, data = review_json(root, capsys)
     assert code == 0 and data["truncated"] is True     # the reviewer is still warned
@@ -378,7 +378,7 @@ def test_a_new_file_with_an_awkward_name_still_has_a_body(tmp_path):
     name resolves to nothing on disk, so the file quietly arrives as a name."""
     root = pin(repo(tmp_path), script=[CLEAN])
     try:
-        (root / "café loader.py").write_text("def accented():\n    return 'body of the odd one'\n")
+        (root / "café loader.py").write_text("def accented():\n    return 'body of the odd one'\n", encoding="utf-8")
     except (OSError, UnicodeEncodeError):          # pragma: no cover - exotic filesystem
         import pytest
         pytest.skip("filesystem will not take that name")
@@ -391,7 +391,7 @@ def test_duets_own_session_files_are_not_sent_as_the_change(tmp_path):
     root = pin(repo(tmp_path), script=[CLEAN])
     session = root / ".duet" / "sessions" / "20260101-000000-aaaa"
     session.mkdir(parents=True)
-    (session / "transcript.md").write_text("pages and pages of an old argument\n")
+    (session / "transcript.md").write_text("pages and pages of an old argument\n", encoding="utf-8")
 
     _, prompt = sent_prompt(root)
     assert "pages and pages" not in prompt
@@ -399,7 +399,7 @@ def test_duets_own_session_files_are_not_sent_as_the_change(tmp_path):
 
 def test_a_truncated_change_is_flagged_not_silently_shortened(tmp_path, capsys):
     root = pin(repo(tmp_path), script=[CLEAN])
-    (root / "loader.py").write_text("".join("line %05d %s\n" % (n, "x" * 40) for n in range(3000)))
+    (root / "loader.py").write_text("".join("line %05d %s\n" % (n, "x" * 40) for n in range(3000)), encoding="utf-8")
 
     code, data = review_json(root, capsys)
     assert code == 0 and data["truncated"] is True
@@ -422,7 +422,7 @@ def test_a_reviewer_that_edits_the_tree_does_not_get_a_clean_exit(tmp_path, caps
     # duet sees the change, not who made it, so the message must not assert
     # that the reviewer did it — it fired once on an unrelated concurrent edit.
     assert "held read-only" in out
-    assert (root / "loader.py").read_text() == "print('I fixed it myself')\n"
+    assert (root / "loader.py").read_text(encoding="utf-8") == "print('I fixed it myself')\n"
 
     # A second run needs the reviewer to write something new: rewriting the same
     # bytes is not a change to the tree, and must not be reported as one.

@@ -63,7 +63,7 @@ def test_unchanged_workspace_still_holds(tmp_path, capsys):
 
 def test_drifted_workspace_no_longer_holds(tmp_path, capsys):
     _, result = signed_session(tmp_path)
-    (tmp_path / "app.py").write_text("print('something else')\n")
+    (tmp_path / "app.py").write_text("print('something else')\n", encoding="utf-8")
 
     assert verify(tmp_path) == 1
     out = capsys.readouterr().out
@@ -89,7 +89,7 @@ def test_json_report_carries_both_state_ids(tmp_path, capsys):
     assert data["gate"]["ok"] is True and data["gate"]["skipped"] is False
     assert set(data["signoffs"]) == {"claude", "gpt"}
 
-    (tmp_path / "app.py").write_text("drift\n")
+    (tmp_path / "app.py").write_text("drift\n", encoding="utf-8")
     code, data = verify_json(tmp_path, capsys)
     assert code == 1 and data["ok"] is False
     assert data["match"] is False
@@ -130,7 +130,7 @@ def test_falls_back_past_a_session_that_saved_no_state(tmp_path, capsys):
     orch, _ = signed_session(tmp_path)
     crashed = tmp_path / ".duet" / "sessions" / "99999999-235959-dead"
     crashed.mkdir(parents=True)
-    (crashed / "events.jsonl").write_text("{}\n")  # killed before its first save
+    (crashed / "events.jsonl").write_text("{}\n", encoding="utf-8")  # killed before its first save
 
     assert verify(tmp_path) == 0
     out = capsys.readouterr().out

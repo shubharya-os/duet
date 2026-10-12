@@ -140,7 +140,7 @@ def ecc_cache(home: Path) -> Optional[Path]:
 
 def ecc_installed(home: Path) -> bool:
     try:
-        data = json.loads((home / ".claude" / "plugins" / "installed_plugins.json").read_text())
+        data = json.loads((home / ".claude" / "plugins" / "installed_plugins.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
     return any(key.startswith("ecc@") for key in (data.get("plugins") or {}))

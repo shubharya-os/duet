@@ -15,6 +15,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from duet.winlaunch import command as launchable
+
 from duet.adapters.base import (
     DEFAULT_TURN_TIMEOUT,
     RUNTIME_FIX,
@@ -33,10 +35,13 @@ from duet.adapters.base import (
 DEFAULT_CANDIDATES = (
     os.environ.get("DUET_CLAUDE_BIN", ""),
     "claude",
-    str(Path.home() / ".claude" / "local" / "claude"),
+    # expanduser, not Path.home(): this runs at import, and Path.home() raises
+    # where no home directory is known (Windows without USERPROFILE), which
+    # took every duet command down with it.
+    os.path.expanduser(os.path.join("~", ".claude", "local", "claude")),
     "/opt/homebrew/bin/claude",
     "/usr/local/bin/claude",
-    str(Path.home() / ".local" / "bin" / "claude"),
+    os.path.expanduser(os.path.join("~", ".local", "bin", "claude")),
 )
 
 INSTALL_HINT = "npm install -g @anthropic-ai/claude-code"
@@ -190,10 +195,10 @@ class ClaudeCodeAdapter(Adapter):
         cmd = self._command(prompt, system)
         try:
             proc = subprocess.run(
-                cmd,
+                launchable(cmd),
                 cwd=self.cwd,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 timeout=self.timeout,
                 # the prompt is passed with -p; an inherited stdin pipe would
                 # only give the CLI something else to wait on
@@ -217,6 +222,10 @@ class ClaudeCodeAdapter(Adapter):
                 % human_duration(self.timeout),
                 meta={"backend": self.backend, "timed_out": True, "timeout_s": self.timeout},
             )
+        except OSError as exc:
+            # Found but could not be started, e.g. a batch file Windows cannot
+            # execute directly: say so rather than crash the session.
+            return AgentReply(text="", error="could not run claude: %s" % exc)
 
         stdout = (proc.stdout or "").strip()
         stderr = (proc.stderr or "").strip()
@@ -288,7 +297,8 @@ class ClaudeCodeAdapter(Adapter):
                 return Probe(ok=False, detail="installed at %s, but %s" % (where, detail),
                              fix=RUNTIME_FIX)
             try:
-                proc = subprocess.run(list(launch) + ["--version"], capture_output=True, text=True, timeout=30)
+                proc = subprocess.run(launchable(list(launch) + ["--version"]), capture_output=True,
+                                      text=True, encoding="utf-8", errors="replace", timeout=30)
             except (OSError, subprocess.SubprocessError) as exc:
                 return Probe(ok=False, detail="found %s but could not run it: %s" % (where, exc),
                              fix=RUNTIME_FIX)

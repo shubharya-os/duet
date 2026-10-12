@@ -105,7 +105,7 @@ def test_a_refused_test_run_reaches_the_peer_as_unverified_without_an_extra_turn
 def test_a_plan_session_may_run_the_project_s_tests_though_it_has_no_gate(tmp_path, monkeypatch):
     from duet import cli, workflow_commands
 
-    (tmp_path / "test_app.py").write_text("def test_one():\n    assert True\n")
+    (tmp_path / "test_app.py").write_text("def test_one():\n    assert True\n", encoding="utf-8")
     seen = {}
     monkeypatch.setattr(cli.gate_detect, "detect", lambda root: "pytest -q")
     monkeypatch.setattr(cli, "cmd_run", lambda args: seen.update(vars(args)) or 0)
@@ -131,14 +131,14 @@ def test_a_plan_session_may_run_the_project_s_tests_though_it_has_no_gate(tmp_pa
 def _kinds(orch):
     import json
     path = orch.session_dir / "events.jsonl"
-    return [json.loads(l)["kind"] for l in path.read_text().splitlines() if l.strip()]
+    return [json.loads(l)["kind"] for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 # -- duet plan --quick ------------------------------------------------------
 
 def quick(tmp_path, lead, reviewer):
     from duet.orchestrator import Orchestrator as O
-    (tmp_path / "app.py").write_text("x = 1\n")
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
     cfg = Config(task="t", root=str(tmp_path), start="claude", max_rounds=2, workflow="plan",
                  workflow_state={"quick": True},
                  agents=[AgentSpec("claude", "mock"), AgentSpec("gpt", "mock")])

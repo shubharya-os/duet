@@ -23,7 +23,7 @@ class Cleaner(MockAdapter):
 
     def send(self, prompt, system="", round_no=0):
         if self.turns == 1:
-            (Path(self.cwd) / "app.py").write_text("shelf = 1\n")
+            (Path(self.cwd) / "app.py").write_text("shelf = 1\n", encoding="utf-8")
         return super().send(prompt, system, round_no)
 
 
@@ -35,7 +35,7 @@ def config(root, rounds):
 
 
 def test_consensus_is_vetoed_while_the_sweep_is_dirty(tmp_path):
-    (tmp_path / "app.py").write_text("booklyShelf = 1\n")
+    (tmp_path / "app.py").write_text("booklyShelf = 1\n", encoding="utf-8")
     adapters = {
         "claude": Cleaner(name="claude", cwd=str(tmp_path), config={"script": [DONE]}),
         "gpt": MockAdapter(name="gpt", cwd=str(tmp_path), config={"script": [DONE]}),
@@ -50,8 +50,8 @@ def test_consensus_is_vetoed_while_the_sweep_is_dirty(tmp_path):
 
 
 def test_a_dirty_sweep_never_reaches_consensus(tmp_path):
-    (tmp_path / "app.py").write_text("x = 1\n")
-    (tmp_path / "theme.css").write_text("a { color: #F36; }\n")
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "theme.css").write_text("a { color: #F36; }\n", encoding="utf-8")
     adapters = {n: MockAdapter(name=n, cwd=str(tmp_path), config={"script": [DONE]})
                 for n in ("claude", "gpt")}
     result = Orchestrator(config(tmp_path, 4), adapters=adapters).run()
@@ -59,7 +59,7 @@ def test_a_dirty_sweep_never_reaches_consensus(tmp_path):
 
 
 def test_a_clean_product_reaches_consensus_as_before(tmp_path):
-    (tmp_path / "app.py").write_text("shelf = 1\n")
+    (tmp_path / "app.py").write_text("shelf = 1\n", encoding="utf-8")
     adapters = {n: MockAdapter(name=n, cwd=str(tmp_path), config={"script": [DONE]})
                 for n in ("claude", "gpt")}
     result = Orchestrator(config(tmp_path, 4), adapters=adapters).run()
@@ -70,8 +70,8 @@ def test_the_plan_workflow_refuses_a_plan_missing_a_must_have(tmp_path):
     state = {"must_cover": ["shared shelf", "reading goals"]}
     plan = Plan()
     plan.begin(str(tmp_path), state)
-    (tmp_path / "PLAN.md").write_text("1. shared shelf\n")
+    (tmp_path / "PLAN.md").write_text("1. shared shelf\n", encoding="utf-8")
     veto = plan.veto(str(tmp_path), state)
     assert veto is not None and "reading goals" in veto
-    (tmp_path / "PLAN.md").write_text("1. shared shelf\n2. Reading goals\n")
+    (tmp_path / "PLAN.md").write_text("1. shared shelf\n2. Reading goals\n", encoding="utf-8")
     assert plan.veto(str(tmp_path), state) is None

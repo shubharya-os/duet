@@ -31,7 +31,7 @@ def run(tmp_path, claude_script, gpt_script, **kwargs):
 def event_kinds(result):
     """Every event kind a session recorded, read back off disk."""
     path = Path(result.session_dir) / "events.jsonl"
-    return [json.loads(line).get("kind") for line in path.read_text().splitlines() if line.strip()]
+    return [json.loads(line).get("kind") for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 WRITE = envelope("first pass", "CONTINUE", patches=[{"path": "app.py", "content": "print('hi')\n"}])
@@ -130,13 +130,13 @@ def test_the_session_is_written_to_disk(tmp_path):
     session = Path(result.session_dir)
     assert (session / "report.md").is_file()
     assert (session / "transcript.md").is_file()
-    events = [json.loads(l) for l in (session / "events.jsonl").read_text().splitlines()]
+    events = [json.loads(l) for l in (session / "events.jsonl").read_text(encoding="utf-8").splitlines()]
     assert events[0]["kind"] == "session_start" and events[-1]["kind"] == "session_end"
 
-    state = json.loads((session / "state.json").read_text())
+    state = json.loads((session / "state.json").read_text(encoding="utf-8"))
     assert state["state"]["issues"][0]["id"] == "needs-tests"
 
-    report = (session / "report.md").read_text()
+    report = (session / "report.md").read_text(encoding="utf-8")
     assert "BOTH" in report.upper() or "consensus" in report
     assert "needs-tests" in report
 
@@ -168,11 +168,17 @@ def test_progress_is_visible_while_a_session_runs(tmp_path):
     import subprocess
     import sys
 
+    import os
+
+    # No home directory in this environment, on purpose; but Windows cannot
+    # start much of anything without SYSTEMROOT.
+    env = {"PATH": "/usr/bin:/bin", "NO_COLOR": "1",
+           "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+    if "SYSTEMROOT" in os.environ:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     proc = subprocess.run(
         [sys.executable, "-m", "duet", "demo", "-C", str(tmp_path), "--quiet"],
-        capture_output=True, text=True, timeout=120,
-        env={"PATH": "/usr/bin:/bin", "NO_COLOR": "1",
-             "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+        capture_output=True, text=True, encoding="utf-8", timeout=120, env=env,
     )
     assert proc.returncode == 0
     assert "BOTH AGENTS SIGNED OFF" in proc.stdout
@@ -231,7 +237,7 @@ def test_the_codex_skill_carries_the_frontmatter_codex_reads(tmp_path):
     from duet.cli import main, skill_dir
 
     assert main(["skill", "install", "--dir", str(tmp_path)]) == 0
-    text = (tmp_path / ".codex" / "skills" / "duet" / "SKILL.md").read_text()
+    text = (tmp_path / ".codex" / "skills" / "duet" / "SKILL.md").read_text(encoding="utf-8")
     header = text.split("---")[1]
     assert "name: duet" in header
     assert "description:" in header
@@ -246,12 +252,14 @@ def test_installing_twice_changes_nothing_and_an_edit_is_not_clobbered(tmp_path)
     assert main(["skill", "install", "--dir", str(tmp_path)]) == 0      # idempotent
 
     edited = tmp_path / ".claude" / "commands" / "duet.md"
-    edited.write_text("someone customised this\n")
+    edited.write_text("someone customised this\n", encoding="utf-8")
     assert main(["skill", "install", "--dir", str(tmp_path)]) == 1      # refuses
-    assert edited.read_text() == "someone customised this\n"
+    assert edited.read_text(encoding="utf-8") == "someone customised this\n"
 
     assert main(["skill", "install", "--dir", str(tmp_path), "--force"]) == 0
-    assert "duet run" in edited.read_text()
+    # Not "duet run": on Windows the invocation found on PATH is `...\duet.EXE`.
+    restored = edited.read_text(encoding="utf-8")
+    assert ' run "$ARGUMENTS"' in restored and "{{DUET}}" not in restored
 
 
 def test_every_installed_file_declares_itself_to_its_host():
@@ -259,12 +267,12 @@ def test_every_installed_file_declares_itself_to_its_host():
     from duet.cli import SKILL_TARGETS, skill_dir
 
     for label, filename, _, _ in SKILL_TARGETS:
-        text = (skill_dir() / filename).read_text()
+        text = (skill_dir() / filename).read_text(encoding="utf-8")
         assert text.startswith("---"), label
         header = text.split("---")[1]
         assert "description:" in header, label
 
-    skill = (skill_dir() / "SKILL.md").read_text()
+    skill = (skill_dir() / "SKILL.md").read_text(encoding="utf-8")
     assert "name: duet" in skill.split("---")[1]
 
 
@@ -353,7 +361,7 @@ def test_context_can_come_from_a_file(tmp_path):
     from duet.cli import read_context
 
     note = tmp_path / "ctx.md"
-    note.write_text("decided: postgres, not sqlite\n")
+    note.write_text("decided: postgres, not sqlite\n", encoding="utf-8")
     args = argparse.Namespace(context_file=str(note), context=None)
     assert "postgres" in read_context(args)
 
@@ -390,7 +398,7 @@ def test_status_reports_a_session_while_it_is_still_running(tmp_path, capsys):
         {"kind": "turn_start", "t": t0 + 4, "round": 3, "agent": "claude"},
     ]
     session.joinpath("events.jsonl").write_text(
-        "\n".join(_json.dumps(e) for e in events) + "\n")
+        "\n".join(_json.dumps(e) for e in events) + "\n", encoding="utf-8")
 
     assert main(["status", "-C", str(tmp_path), "--quiet"]) == 0
     out = capsys.readouterr().out
@@ -418,7 +426,7 @@ def test_the_installed_files_call_duet_by_a_path_that_resolves(tmp_path, monkeyp
     assert main(["skill", "install", "--dir", str(tmp_path)]) == 0
 
     for _, _, relative, _ in SKILL_TARGETS:
-        text = (tmp_path / relative).read_text()
+        text = (tmp_path / relative).read_text(encoding="utf-8")
         assert "{{DUET}}" not in text, relative
         assert "-m duet" in text, relative          # falls back to the module form
 
@@ -426,18 +434,15 @@ def test_the_installed_files_call_duet_by_a_path_that_resolves(tmp_path, monkeyp
 def test_a_working_duet_on_path_is_used_as_is(tmp_path, monkeypatch):
     """Preferred when it exists — but only after it has been run, which is why
     a path that merely looks right is not enough."""
-    import os
-    import stat
+    from fakebin import fake_cli
 
-    fake = tmp_path / "duet"
-    fake.write_text("#!/usr/bin/env bash\necho 'duet 0.1.0'\n")
-    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    fake = fake_cli(tmp_path, "duet", "echo 'duet 0.1.0'\n")
 
     monkeypatch.setattr("duet.cli.shutil.which",
                         lambda name: str(fake) if name == "duet" else None)
     home = tmp_path / "home"
     assert main_install(home) == 0
-    text = (home / ".claude" / "commands" / "duet.md").read_text()
+    text = (home / ".claude" / "commands" / "duet.md").read_text(encoding="utf-8")
     assert "%s run" % fake in text
     assert "-m duet" not in text
 
@@ -446,7 +451,7 @@ def test_a_duet_on_path_that_does_not_run_is_not_trusted(tmp_path, monkeypatch):
     import stat
 
     broken = tmp_path / "duet"
-    broken.write_text("#!/usr/bin/env bash\necho 'command not found' >&2\nexit 127\n")
+    broken.write_text("#!/usr/bin/env bash\necho 'command not found' >&2\nexit 127\n", encoding="utf-8")
     broken.chmod(broken.stat().st_mode | stat.S_IEXEC)
 
     monkeypatch.setattr("duet.cli.shutil.which",
@@ -470,7 +475,7 @@ def test_the_command_pre_authorises_the_invocation_it_actually_uses(tmp_path, mo
 
     monkeypatch.setattr("duet.cli.shutil.which", lambda name: None)
     assert main(["skill", "install", "--dir", str(tmp_path)]) == 0
-    text = (tmp_path / ".claude" / "commands" / "duet.md").read_text()
+    text = (tmp_path / ".claude" / "commands" / "duet.md").read_text(encoding="utf-8")
 
     header = text.split("---")[1]
     invocation = next(line.split("```bash")[0] for line in text.splitlines()
@@ -572,7 +577,7 @@ def test_session_records_whether_context_crossed(tmp_path):
     orch = Orchestrator(cfg, adapters=ads)
     orch.run()
     events = [json.loads(l) for l in
-              (Path(orch.session_dir) / "events.jsonl").read_text().splitlines()]
+              (Path(orch.session_dir) / "events.jsonl").read_text(encoding="utf-8").splitlines()]
     start = next(e for e in events if e["kind"] == "session_start")
     assert start["context_chars"] == len("ruled out: requests")
     assert "ruled out" not in json.dumps(start)
@@ -659,12 +664,12 @@ def test_commit_does_not_put_duets_own_logs_in_your_history(tmp_path):
 
     def git(*args):
         return subprocess.run(["git", *args], cwd=str(tmp_path),
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, encoding="utf-8")
 
     git("init", "-q")
     git("config", "user.email", "t@t")
     git("config", "user.name", "t")
-    (tmp_path / "seed.txt").write_text("seed\n")
+    (tmp_path / "seed.txt").write_text("seed\n", encoding="utf-8")
     git("add", "-A")
     git("commit", "-qm", "init")
 
@@ -683,12 +688,12 @@ def test_commit_makes_no_commit_when_nothing_outside_duet_changed(tmp_path):
 
     def git(*args):
         return subprocess.run(["git", *args], cwd=str(tmp_path),
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, encoding="utf-8")
 
     git("init", "-q")
     git("config", "user.email", "t@t")
     git("config", "user.name", "t")
-    (tmp_path / "seed.txt").write_text("seed\n")
+    (tmp_path / "seed.txt").write_text("seed\n", encoding="utf-8")
     git("add", "-A")
     git("commit", "-qm", "init")
 

@@ -13,6 +13,7 @@ from duet import workflows
 from duet.adapters.mock import MockAdapter, envelope
 from duet.config import AgentSpec, Config
 from duet.orchestrator import Orchestrator
+from duet.winlaunch import quote_for_shell
 
 
 def run(tmp_path, claude_script, gpt_script, **kwargs):
@@ -30,7 +31,7 @@ def run(tmp_path, claude_script, gpt_script, **kwargs):
 
 def kinds(result):
     path = Path(result.session_dir) / "events.jsonl"
-    return [json.loads(l).get("kind") for l in path.read_text().splitlines() if l.strip()]
+    return [json.loads(l).get("kind") for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 def write(path, content, verdict="DONE"):
@@ -38,6 +39,16 @@ def write(path, content, verdict="DONE"):
 
 
 DONE = envelope("I would ship this", "DONE", confidence=0.9)
+
+
+def python_gate(code):
+    """A gate that means the same in sh and in cmd.exe, which runs it on Windows.
+
+    `test "$(cat f)" = x` is sh: cmd never expands `$(...)`, so the comparison
+    was of two literal strings, the same answer every time, and the rule under
+    test never saw the gate change.
+    """
+    return '%s -c "import pathlib, sys; %s"' % (quote_for_shell(sys.executable), code)
 
 
 # -- fix: the bug has to have been seen to fail --------------------------------
@@ -52,7 +63,8 @@ def test_a_fix_that_never_reproduced_the_bug_does_not_count(tmp_path):
 
 
 def test_a_fix_whose_bug_went_red_first_counts(tmp_path):
-    gate = 'test "$(cat state.txt 2>/dev/null)" != red'
+    gate = python_gate("p = pathlib.Path('state.txt'); "
+                       "sys.exit(p.is_file() and p.read_text(encoding='utf-8') == 'red')")
     _, result = run(
         tmp_path,
         [write("state.txt", "red", "CONTINUE"), DONE, DONE],   # reproduce
@@ -64,7 +76,7 @@ def test_a_fix_whose_bug_went_red_first_counts(tmp_path):
 
 
 def test_a_suite_already_failing_on_arrival_counts_as_reproduced(tmp_path):
-    (tmp_path / "test_bug.py").write_text("def test_bug():\n    assert False\n")
+    (tmp_path / "test_bug.py").write_text("def test_bug():\n    assert False\n", encoding="utf-8")
     _, result = run(tmp_path, [write("fixed.txt", "yes")] + [DONE] * 4, [DONE] * 4,
                     workflow="fix", gate="test -f fixed.txt")
     assert result.status == "consensus"
@@ -94,8 +106,8 @@ def test_a_feature_with_a_test_that_fails_without_it_counts(tmp_path):
 
 def test_a_feature_whose_new_test_would_pass_without_it_does_not_count(tmp_path):
     """The whitespace-edit loophole: a test changed, but tests nothing new."""
-    (tmp_path / "core.py").write_text("def one():\n    return 1\n")
-    (tmp_path / "test_core.py").write_text("from core import one\n\ndef test_one():\n    assert one() == 1\n")
+    (tmp_path / "core.py").write_text("def one():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "test_core.py").write_text("from core import one\n\ndef test_one():\n    assert one() == 1\n", encoding="utf-8")
     unrelated = envelope("added a feature and a test", "DONE", patches=[
         {"path": "feature.py", "content": "def two():\n    return 2\n"},
         {"path": "test_extra.py",   # passes on the original code too
@@ -121,8 +133,8 @@ def test_a_fix_written_in_one_turn_counts_without_re_breaking_anything(tmp_path)
     purpose to show the harness a red gate. The replay accepts it outright,
     because the new test fails against the original code by itself.
     """
-    (tmp_path / "slug.py").write_text(BUGGY)
-    (tmp_path / "test_slug.py").write_text(OLD_TEST)
+    (tmp_path / "slug.py").write_text(BUGGY, encoding="utf-8")
+    (tmp_path / "test_slug.py").write_text(OLD_TEST, encoding="utf-8")
     both = envelope("fixed, with a test", "DONE", patches=[
         {"path": "slug.py", "content": FIXED},
         {"path": "test_slug.py", "content": OLD_TEST +
@@ -134,8 +146,8 @@ def test_a_fix_written_in_one_turn_counts_without_re_breaking_anything(tmp_path)
 
 
 def test_a_fix_whose_tests_pass_on_the_buggy_code_does_not_count(tmp_path):
-    (tmp_path / "slug.py").write_text(BUGGY)
-    (tmp_path / "test_slug.py").write_text(OLD_TEST)
+    (tmp_path / "slug.py").write_text(BUGGY, encoding="utf-8")
+    (tmp_path / "test_slug.py").write_text(OLD_TEST, encoding="utf-8")
     blind = envelope("fixed, with a test that does not look at the bug", "DONE", patches=[
         {"path": "slug.py", "content": FIXED},
         {"path": "test_slug.py", "content": OLD_TEST +
@@ -147,9 +159,9 @@ def test_a_fix_whose_tests_pass_on_the_buggy_code_does_not_count(tmp_path):
 
 
 def test_a_fix_may_not_delete_the_failing_test(tmp_path):
-    (tmp_path / "slug.py").write_text(BUGGY)
+    (tmp_path / "slug.py").write_text(BUGGY, encoding="utf-8")
     (tmp_path / "test_bug.py").write_text(
-        'from slug import slugify\n\ndef test_bug():\n    assert slugify("a,b") == "ab"\n')
+        'from slug import slugify\n\ndef test_bug():\n    assert slugify("a,b") == "ab"\n', encoding="utf-8")
     delete = envelope("removed the failing test", "DONE",
                       patches=[{"path": "test_bug.py", "action": "delete"}])
     _, result = run(tmp_path, [delete] + [DONE] * 6, [DONE] * 6, workflow="fix", gate=PYTEST)
@@ -159,7 +171,7 @@ def test_a_fix_may_not_delete_the_failing_test(tmp_path):
 # -- refactor: the yardstick may not move --------------------------------------
 
 def test_a_refactor_that_edits_an_existing_test_does_not_count(tmp_path):
-    (tmp_path / "test_core.py").write_text("def test_core():\n    assert 1 + 1 == 2\n")
+    (tmp_path / "test_core.py").write_text("def test_core():\n    assert 1 + 1 == 2\n", encoding="utf-8")
     _, result = run(tmp_path,
                     [write("test_core.py", "def test_core():\n    pass\n")] + [DONE] * 6,
                     [DONE] * 6, workflow="refactor", gate="true")
@@ -168,14 +180,14 @@ def test_a_refactor_that_edits_an_existing_test_does_not_count(tmp_path):
 
 
 def test_a_refactor_that_leaves_the_tests_alone_counts(tmp_path):
-    (tmp_path / "test_core.py").write_text("def test_core():\n    assert 1 + 1 == 2\n")
+    (tmp_path / "test_core.py").write_text("def test_core():\n    assert 1 + 1 == 2\n", encoding="utf-8")
     _, result = run(tmp_path, [write("core.py", "def add(a, b):\n    return a + b\n")] + [DONE] * 3,
                     [DONE] * 3, workflow="refactor", gate="true")
     assert result.status == "consensus"
 
 
 def test_a_refactor_may_add_tests(tmp_path):
-    (tmp_path / "test_core.py").write_text("def test_core():\n    assert True\n")
+    (tmp_path / "test_core.py").write_text("def test_core():\n    assert True\n", encoding="utf-8")
     _, result = run(tmp_path, [write("test_extra.py", "def test_more():\n    pass\n")] + [DONE] * 3,
                     [DONE] * 3, workflow="refactor", gate="true")
     assert result.status == "consensus"
@@ -184,7 +196,7 @@ def test_a_refactor_may_add_tests(tmp_path):
 # -- plan: nothing but the plan ------------------------------------------------
 
 def test_a_plan_that_also_changed_code_does_not_count(tmp_path):
-    (tmp_path / "app.py").write_text("x = 1\n")
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
     both = envelope("planned, and started", "DONE",
                     patches=[{"path": "PLAN.md", "content": "# plan\n1. do it\n"},
                              {"path": "app.py", "content": "x = 2\n"}])
@@ -199,7 +211,7 @@ def test_a_plan_with_no_plan_in_it_does_not_count(tmp_path):
 
 
 def test_a_plan_that_is_only_a_plan_counts(tmp_path):
-    (tmp_path / "app.py").write_text("x = 1\n")
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
     _, result = run(tmp_path, [write("PLAN.md", "# plan\n1. do it\n")] + [DONE] * 3, [DONE] * 3,
                     workflow="plan")
     assert result.status == "consensus"
@@ -221,9 +233,9 @@ def test_a_resumed_session_keeps_its_original_baseline():
 
 
 def test_test_files_ignore_dependency_trees(tmp_path):
-    (tmp_path / "test_mine.py").write_text("x")
+    (tmp_path / "test_mine.py").write_text("x", encoding="utf-8")
     (tmp_path / "node_modules" / "pkg").mkdir(parents=True)
-    (tmp_path / "node_modules" / "pkg" / "a.test.js").write_text("x")
+    (tmp_path / "node_modules" / "pkg" / "a.test.js").write_text("x", encoding="utf-8")
     assert list(workflows.test_files(str(tmp_path))) == ["test_mine.py"]
 
 
@@ -271,8 +283,8 @@ def test_each_task_names_its_gate_and_states_its_rule():
 
 def test_a_met_rule_is_announced_with_what_it_proved(tmp_path):
     """The replay's verdict is the reason to use `fix` — so the user sees it."""
-    (tmp_path / "slug.py").write_text(BUGGY)
-    (tmp_path / "test_slug.py").write_text(OLD_TEST)
+    (tmp_path / "slug.py").write_text(BUGGY, encoding="utf-8")
+    (tmp_path / "test_slug.py").write_text(OLD_TEST, encoding="utf-8")
     both = envelope("fixed, with a test", "DONE", patches=[
         {"path": "slug.py", "content": FIXED},
         {"path": "test_slug.py", "content": OLD_TEST +
@@ -280,7 +292,7 @@ def test_a_met_rule_is_announced_with_what_it_proved(tmp_path):
     ])
     _, result = run(tmp_path, [both] + [DONE] * 3, [DONE] * 3, workflow="fix", gate=PYTEST)
     path = Path(result.session_dir) / "events.jsonl"
-    proven = [json.loads(l) for l in path.read_text().splitlines()
+    proven = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines()
               if json.loads(l).get("kind") == "workflow_proven"]
     assert proven and "fail on the original code" in proven[0]["detail"]
 
@@ -304,8 +316,8 @@ def test_a_fix_whose_tests_only_fail_on_an_import_is_accepted_but_flagged(tmp_pa
     wrong (pytest drops the whole module on one bad import, real checks
     included), so it is accepted and the verdict says what it did not prove.
     """
-    (tmp_path / "slug.py").write_text(BUGGY)
-    (tmp_path / "test_slug.py").write_text(OLD_TEST)
+    (tmp_path / "slug.py").write_text(BUGGY, encoding="utf-8")
+    (tmp_path / "test_slug.py").write_text(OLD_TEST, encoding="utf-8")
     helper_fix = envelope("fixed via a helper, tested via the helper", "DONE", patches=[
         {"path": "slug.py", "content": FIXED + "\n\ndef strip_punct(t):\n    return t\n"},
         {"path": "test_helper.py",
@@ -314,7 +326,7 @@ def test_a_fix_whose_tests_only_fail_on_an_import_is_accepted_but_flagged(tmp_pa
     _, result = run(tmp_path, [helper_fix] + [DONE] * 3, [DONE] * 3, workflow="fix", gate=PYTEST)
     assert result.status == "consensus"
     path = Path(result.session_dir) / "events.jsonl"
-    proven = [json.loads(l)["detail"] for l in path.read_text().splitlines()
+    proven = [json.loads(l)["detail"] for l in path.read_text(encoding="utf-8").splitlines()
               if json.loads(l).get("kind") == "workflow_proven"]
     assert proven and "only because they import" in proven[0]
 
@@ -324,7 +336,7 @@ def test_a_fix_whose_tests_only_fail_on_an_import_is_accepted_but_flagged(tmp_pa
 def test_a_plan_that_skips_an_existing_test_does_not_count(tmp_path):
     """Both plans in a head-to-head missed a pitfall in a test neither had read."""
     (tmp_path / "test_core.py").write_text(
-        "def test_adds():\n    pass\n\ndef test_rejects_bools():\n    pass\n")
+        "def test_adds():\n    pass\n\ndef test_rejects_bools():\n    pass\n", encoding="utf-8")
     partial = write("PLAN.md", "# plan\nKeep test_adds passing by leaving add() alone.\n")
     _, result = run(tmp_path, [partial] + [DONE] * 6, [DONE] * 6, workflow="plan")
     assert result.status != "consensus"
@@ -333,22 +345,22 @@ def test_a_plan_that_skips_an_existing_test_does_not_count(tmp_path):
 
 def test_a_plan_that_accounts_for_every_test_counts(tmp_path):
     (tmp_path / "test_core.py").write_text(
-        "def test_adds():\n    pass\n\ndef test_rejects_bools():\n    pass\n")
+        "def test_adds():\n    pass\n\ndef test_rejects_bools():\n    pass\n", encoding="utf-8")
     full = write("PLAN.md", "# plan\n- test_adds: unchanged.\n- test_rejects_bools: validate first.\n")
     _, result = run(tmp_path, [full] + [DONE] * 3, [DONE] * 3, workflow="plan")
     assert result.status == "consensus"
 
 
 def test_test_names_are_read_across_ecosystems(tmp_path):
-    (tmp_path / "test_a.py").write_text("def test_one():\n    pass\nasync def test_two():\n    pass\n")
-    (tmp_path / "x_test.go").write_text("func TestThree(t *testing.T) {}\n")
-    (tmp_path / "y.test.ts").write_text("it('handles the empty case', () => {})\n")
+    (tmp_path / "test_a.py").write_text("def test_one():\n    pass\nasync def test_two():\n    pass\n", encoding="utf-8")
+    (tmp_path / "x_test.go").write_text("func TestThree(t *testing.T) {}\n", encoding="utf-8")
+    (tmp_path / "y.test.ts").write_text("it('handles the empty case', () => {})\n", encoding="utf-8")
     names = workflows.test_names(str(tmp_path))
     assert {"test_one", "test_two", "TestThree", "handles the empty case"} <= set(names)
 
 
 def test_the_plan_task_hands_the_pair_the_test_names(tmp_path, capsys, monkeypatch):
-    (tmp_path / "test_core.py").write_text("def test_adds():\n    pass\n")
+    (tmp_path / "test_core.py").write_text("def test_adds():\n    pass\n", encoding="utf-8")
     seen = {}
     monkeypatch.setattr("duet.cli.cmd_run", lambda a: seen.setdefault("task", a.task[0]) and 0)
     workflow_commands.run(args_for(tmp_path, what="move storage"), "plan")
@@ -408,7 +420,7 @@ RECOGNISED = [
 def test_what_counts_as_a_test_file(tmp_path, rel, is_test):
     path = tmp_path / rel
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("x")
+    path.write_text("x", encoding="utf-8")
     assert (rel in workflows.test_files(str(tmp_path))) is is_test
 
 
@@ -416,7 +428,7 @@ def test_a_changed_swift_test_satisfies_the_add_rule(tmp_path):
     """The `add` veto in an Xcode layout, which compared two empty sets."""
     (tmp_path / "GalleryTests").mkdir()
     suite = tmp_path / "GalleryTests" / "AppLogicTests.swift"
-    suite.write_text("func testOne() { XCTAssertTrue(true) }\n")
+    suite.write_text("func testOne() { XCTAssertTrue(true) }\n", encoding="utf-8")
     wf = workflows.get("add")
     state = {}
     wf.begin(str(tmp_path), state)
@@ -426,7 +438,7 @@ def test_a_changed_swift_test_satisfies_the_add_rule(tmp_path):
     assert "No test was added or extended" in (wf.veto(str(tmp_path), state) or "")
 
     suite.write_text("func testOne() { XCTAssertTrue(true) }\n"
-                     "func testTwo() { XCTAssertFalse(false) }\n")
+                     "func testTwo() { XCTAssertFalse(false) }\n", encoding="utf-8")
     assert wf.veto(str(tmp_path), state) is None
 
 
@@ -436,7 +448,7 @@ def test_swift_test_names_are_read_for_a_plan(tmp_path):
         "final class BoardTests: XCTestCase {\n"
         "    func testLadderMovesUp() {}\n"
         "    private func helper() {}\n"
-        "    func testSnakeMovesDown() throws {}\n}\n")
+        "    func testSnakeMovesDown() throws {}\n}\n", encoding="utf-8")
     assert workflows.test_names(str(tmp_path)) == ["testLadderMovesUp", "testSnakeMovesDown"]
 
 
@@ -447,20 +459,22 @@ def test_a_go_helper_is_not_mistaken_for_a_swift_test(tmp_path):
     has to account for by name — a demand for something that is not a test.
     """
     (tmp_path / "server_test.go").write_text(
-        "func TestServes(t *testing.T) {}\n\nfunc testServer(t *testing.T) *S { return nil }\n")
+        "func TestServes(t *testing.T) {}\n\nfunc testServer(t *testing.T) *S { return nil }\n", encoding="utf-8")
     assert workflows.test_names(str(tmp_path)) == ["TestServes"]
 
 
 # -- the replay, which copies the files the same detector finds ---------------
 
-SWIFT_GATE = 'test "$(cat Tests/AppTests.swift)" = "$(cat Sources/App.swift)"'
+SWIFT_GATE = python_gate("t = pathlib.Path('Tests/AppTests.swift').read_text(encoding='utf-8'); "
+                         "s = pathlib.Path('Sources/App.swift').read_text(encoding='utf-8'); "
+                         "sys.exit(t != s)")
 
 
 def swift_workspace(tmp_path, app, expectation):
     (tmp_path / "Sources").mkdir(exist_ok=True)
     (tmp_path / "Tests").mkdir(exist_ok=True)
-    (tmp_path / "Sources" / "App.swift").write_text(app)
-    (tmp_path / "Tests" / "AppTests.swift").write_text(expectation)
+    (tmp_path / "Sources" / "App.swift").write_text(app, encoding="utf-8")
+    (tmp_path / "Tests" / "AppTests.swift").write_text(expectation, encoding="utf-8")
 
 
 def test_the_replay_runs_todays_swift_tests_against_the_original(tmp_path):
@@ -478,12 +492,12 @@ def test_a_swift_test_that_would_have_passed_anyway_is_still_caught(tmp_path):
     swift_workspace(tmp_path, "same\n", "same\n")
     state = {"gate": SWIFT_GATE}
     workflows.snapshot(str(tmp_path), state)
-    (tmp_path / "Tests" / "AppTests.swift").write_text("same\n")   # rewritten, not stronger
+    (tmp_path / "Tests" / "AppTests.swift").write_text("same\n", encoding="utf-8")   # rewritten, not stronger
     assert workflows.replay_fails(str(tmp_path), state) is False
 
 
 def test_a_workspace_with_nothing_that_looks_like_a_test_says_so(tmp_path):
-    (tmp_path / "App.swift").write_text("x\n")
+    (tmp_path / "App.swift").write_text("x\n", encoding="utf-8")
     state = {"gate": "true"}
     workflows.snapshot(str(tmp_path), state)
     assert workflows.replay_fails(str(tmp_path), state) is None
@@ -507,9 +521,9 @@ SYNCED_PBXPROJ = """// !$*UTF8*$!
 
 def xcode_workspace(tmp_path, pbxproj=PBXPROJ):
     (tmp_path / "App.xcodeproj").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "App.xcodeproj" / "project.pbxproj").write_text(pbxproj)
+    (tmp_path / "App.xcodeproj" / "project.pbxproj").write_text(pbxproj, encoding="utf-8")
     (tmp_path / "AppTests").mkdir(exist_ok=True)
-    (tmp_path / "AppTests" / "ExistingTests.swift").write_text("func testOld() {}\n")
+    (tmp_path / "AppTests" / "ExistingTests.swift").write_text("func testOld() {}\n", encoding="utf-8")
 
 
 # A gate driven by Xcode — the driver's name is what marks it as one. Where it
@@ -528,7 +542,7 @@ def test_a_new_test_xcode_would_not_compile_is_reported_as_could_not_run(tmp_pat
     xcode_workspace(tmp_path)
     state = {"gate": XCODE_GATE}
     workflows.snapshot(str(tmp_path), state)
-    (tmp_path / "AppTests" / "NewTests.swift").write_text("func testNew() {}\n")
+    (tmp_path / "AppTests" / "NewTests.swift").write_text("func testNew() {}\n", encoding="utf-8")
 
     assert workflows.replay_fails(str(tmp_path), state) is None
     assert "NewTests.swift" in state["replay_note"]
@@ -540,7 +554,7 @@ def test_an_edited_swift_test_the_xcode_project_already_lists_still_replays(tmp_
     xcode_workspace(tmp_path)
     state = {"gate": XCODE_GATE}
     workflows.snapshot(str(tmp_path), state)
-    (tmp_path / "AppTests" / "ExistingTests.swift").write_text("func testOld() { stronger }\n")
+    (tmp_path / "AppTests" / "ExistingTests.swift").write_text("func testOld() { stronger }\n", encoding="utf-8")
     assert workflows.replay_fails(str(tmp_path), state) is True
     assert "replay_note" not in state
 
@@ -549,7 +563,7 @@ def test_a_synchronized_xcode_group_compiles_new_files_so_the_replay_runs(tmp_pa
     xcode_workspace(tmp_path, SYNCED_PBXPROJ)
     state = {"gate": XCODE_GATE}
     workflows.snapshot(str(tmp_path), state)
-    (tmp_path / "AppTests" / "NewTests.swift").write_text("func testNew() {}\n")
+    (tmp_path / "AppTests" / "NewTests.swift").write_text("func testNew() {}\n", encoding="utf-8")
     assert workflows.replay_fails(str(tmp_path), state) is True
     assert "replay_note" not in state
 
@@ -566,7 +580,7 @@ def test_a_project_whose_gate_is_not_xcode_keeps_its_replay(tmp_path):
     (tmp_path / "__tests__").mkdir()
     state = {"gate": "test ! -f __tests__/new.test.js"}      # jest, in miniature
     workflows.snapshot(str(tmp_path), state)
-    (tmp_path / "__tests__" / "new.test.js").write_text("it('works', () => {})\n")
+    (tmp_path / "__tests__" / "new.test.js").write_text("it('works', () => {})\n", encoding="utf-8")
     assert workflows.replay_fails(str(tmp_path), state) is True
     assert "replay_note" not in state
 
@@ -577,14 +591,14 @@ def test_a_new_javascript_test_beside_an_xcode_project_still_replays(tmp_path):
     (tmp_path / "__tests__").mkdir()
     state = {"gate": XCODE_GATE}
     workflows.snapshot(str(tmp_path), state)
-    (tmp_path / "__tests__" / "new.test.js").write_text("it('works', () => {})\n")
+    (tmp_path / "__tests__" / "new.test.js").write_text("it('works', () => {})\n", encoding="utf-8")
     assert workflows.replay_fails(str(tmp_path), state) is True
     assert "replay_note" not in state
 
 
 def test_the_reason_a_replay_could_not_run_reaches_the_verdict(tmp_path):
     """"No replay was possible" on its own is a shrug; the pair needs the why."""
-    (tmp_path / "App.swift").write_text("x\n")
+    (tmp_path / "App.swift").write_text("x\n", encoding="utf-8")
     wf = workflows.get("fix")
     state = {"gate": "true"}
     wf.begin(str(tmp_path), state)

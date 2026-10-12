@@ -26,6 +26,9 @@ from duet import from_ecc
 from duet import jury
 from duet import make as make_cmd
 from duet.plugin_files import skill_template
+from duet import winlaunch
+from duet.winlaunch import command as launchable
+from duet.winlaunch import quote_for_shell
 from duet.config import (
     BACKEND_ALIASES,
     DEFAULT_GATE_TIMEOUT,
@@ -746,7 +749,7 @@ def cmd_login(args: argparse.Namespace) -> int:
             # The launch prefix, not the binary: under the npx fallback the
             # binary is npx itself, and appending `auth login` to it asks the
             # registry for packages by those names instead of signing anyone in.
-            code = subprocess.call(list(agent.launch) + list(sub))
+            code = subprocess.call(launchable(list(agent.launch) + list(sub)))
         except (OSError, KeyboardInterrupt) as exc:
             print(ui.red("  could not run it: %s" % exc))
             failures += 1
@@ -813,7 +816,8 @@ def _invocation_works(command: str) -> bool:
     try:
         proc = subprocess.run(
             "%s --version" % command,
-            shell=True, capture_output=True, text=True, timeout=60,
+            shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=60,
             cwd=tempfile.gettempdir(),      # anywhere but here, like the caller
         )
     except (OSError, subprocess.SubprocessError):
@@ -827,18 +831,31 @@ def _candidate_invocations() -> List[str]:
     Each path is quoted: on a machine whose home directory has a space in it
     — `/Users/Ada Lovelace/...`, which is ordinary on macOS — an unquoted
     `PYTHONPATH=/Users/Ada Lovelace/x python -m duet` runs `Lovelace/x` as a
-    command and dies with "et: command not found".
+    command and dies with "et: command not found". The quoting itself has to
+    fit the shell this line is checked and eventually run through. On Windows
+    that is not one shell: duet checks it through cmd.exe, but an agent runs it
+    through Git Bash or PowerShell. None of the three shares a way to set a
+    variable for one command — cmd has no `VAR=value cmd` prefix, and bash's
+    `set "VAR=..."` sets no variable at all — so the Windows form sets no
+    variable: it puts the package on sys.path itself, inside one double-quoted
+    `-c` argument that all three read the same way.
     """
     candidates = []
     found = shutil.which("duet")
     if found:
-        candidates.append(shlex.quote(found))
-    candidates.append("%s -m duet" % shlex.quote(sys.executable))
+        candidates.append(quote_for_shell(found))
+    candidates.append("%s -m duet" % quote_for_shell(sys.executable))
     # Importable only because of where it happens to live: say so explicitly
     # rather than relying on the caller's working directory.
     package_root = Path(__file__).resolve().parent.parent
-    candidates.append("PYTHONPATH=%s %s -m duet"
-                      % (shlex.quote(str(package_root)), shlex.quote(sys.executable)))
+    if winlaunch.WINDOWS:
+        candidates.append(
+            '%s -c "import sys; sys.path.insert(0, r\'%s\'); '
+            'from duet.cli import main; sys.exit(main())"'
+            % (quote_for_shell(sys.executable), package_root))
+    else:
+        candidates.append("PYTHONPATH=%s %s -m duet"
+                          % (shlex.quote(str(package_root)), shlex.quote(sys.executable)))
     return candidates
 
 
@@ -1064,7 +1081,7 @@ def _install_derived(home: Path, invocation: str, force: bool, installed, skippe
 def _duet_plugin_installed(home: Path) -> bool:
     """Is the duet Claude Code plugin (`/plugin install duet@duet`) installed?"""
     try:
-        data = json.loads((home / ".claude" / "plugins" / "installed_plugins.json").read_text())
+        data = json.loads((home / ".claude" / "plugins" / "installed_plugins.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
     return any(key.split("@", 1)[0] == "duet" for key in (data.get("plugins") or {}))
@@ -1204,17 +1221,21 @@ def _npm_global_bin() -> Optional[str]:
     """Where `npm install -g` puts commands, if npm will say.
 
     `npm bin -g` was removed in npm 9, so fall back to `npm prefix -g`, which
-    has been there throughout and prints the directory whose `bin` holds them.
+    has been there throughout and prints the directory whose `bin` holds them
+    — on Unix. On Windows npm puts its `.cmd` shims in the prefix itself; there
+    is no `bin` under it.
     """
-    for argv, suffix in ((["npm", "bin", "-g"], None), (["npm", "prefix", "-g"], "bin")):
+    prefix_suffix = None if winlaunch.WINDOWS else "bin"
+    for argv, suffix in ((["npm", "bin", "-g"], None), (["npm", "prefix", "-g"], prefix_suffix)):
         try:
-            proc = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+            proc = subprocess.run(launchable(argv), capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=30)
         except (OSError, subprocess.SubprocessError):
             return None
         out = (proc.stdout or "").strip()
         if proc.returncode == 0 and out:
             path = out.splitlines()[-1].strip()
-            return str(Path(path) / suffix) if suffix else path
+            return str(Path(path) / suffix) if suffix else str(Path(path))
     return None
 
 
@@ -1385,7 +1406,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
     Path(root).mkdir(parents=True, exist_ok=True)
 
     task = "Write greet.py: a function greet(name) returning 'Hello, <name>!' that rejects an empty name."
-    gate = "%s greet.py" % shlex.quote(sys.executable)
+    gate = "%s greet.py" % quote_for_shell(sys.executable)
 
     good = (
         "def greet(name):\n"
@@ -2957,7 +2978,7 @@ def cmd_detach(argv: List[str], args: argparse.Namespace) -> int:
     if os.name != "posix":
         print(ui.red("✗ ") + "--detach is not supported on Windows; run the command "
               "without it (it will not die with this shell unless this shell dies).")
-        return 2
+        return 3        # a setup fault — the platform cannot do this, not a bad argument
 
     nested = refuse_nested(getattr(args, "command", "") or "run", args)
     if nested is not None:
@@ -3008,10 +3029,14 @@ def cmd_detach(argv: List[str], args: argparse.Namespace) -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     # Sessions are long and mostly waiting on an agent. Piped or redirected runs
     # block-buffer by default, which makes a working session look hung.
-    try:
-        sys.stdout.reconfigure(line_buffering=True)
-    except (AttributeError, ValueError):  # pragma: no cover - very old interpreters
-        pass
+    # And UTF-8 always: a Windows pipe defaults to cp1252, which has no ✓, ✗ or
+    # →, so every piped or redirected run died on its first tick with a
+    # UnicodeEncodeError. Whatever reads the pipe gets UTF-8, as it does elsewhere.
+    for stream, extra in ((sys.stdout, {"line_buffering": True}), (sys.stderr, {})):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace", **extra)
+        except (AttributeError, ValueError):  # pragma: no cover - replaced or very old streams
+            pass
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     parser = build_parser()
     args = parser.parse_args(argv)

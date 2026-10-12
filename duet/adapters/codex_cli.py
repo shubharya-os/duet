@@ -17,6 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from duet.winlaunch import command as launchable
+
 from duet.adapters.base import (
     DEFAULT_TURN_TIMEOUT,
     RUNTIME_FIX,
@@ -37,7 +39,7 @@ DEFAULT_CANDIDATES = (
     "codex",
     "/opt/homebrew/bin/codex",
     "/usr/local/bin/codex",
-    str(Path.home() / ".local" / "bin" / "codex"),
+    os.path.expanduser(os.path.join("~", ".local", "bin", "codex")),   # not Path.home(): see claude_code
 )
 
 INSTALL_HINT = "npm install -g @openai/codex"
@@ -133,7 +135,7 @@ def state_dir() -> Path:
     DUET_STATE_DIR exists so tests never touch the real home directory.
     """
     override = os.environ.get("DUET_STATE_DIR")
-    return Path(override).expanduser() if override else Path.home() / ".duet"
+    return Path(os.path.expanduser(override or os.path.join("~", ".duet")))
 
 
 def parse_reset_at(message: str) -> Optional[float]:
@@ -320,10 +322,10 @@ class CodexCliAdapter(Adapter):
                 index += 1
                 try:
                     proc = subprocess.run(
-                        args,
+                        launchable(args),
                         cwd=self.cwd,
                         capture_output=True,
-                        text=True,
+                        text=True, encoding="utf-8", errors="replace",
                         timeout=self.timeout,
                         # `codex exec` appends piped stdin to the prompt, so an
                         # inherited pipe makes it block forever waiting for EOF.
@@ -347,6 +349,8 @@ class CodexCliAdapter(Adapter):
                         meta={"backend": self.backend, "timed_out": True,
                               "timeout_s": self.timeout},
                     )
+                except OSError as exc:
+                    return AgentReply(text="", error="could not run codex: %s" % exc)
 
                 stdout = (proc.stdout or "").strip()
                 combined = (stdout + "\n" + (proc.stderr or "")).strip()

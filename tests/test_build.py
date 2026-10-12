@@ -17,7 +17,7 @@ from duet import build
 
 def run_gate(command, cwd):
     proc = subprocess.run(command, shell=True, cwd=str(cwd),
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, encoding="utf-8", timeout=120)
     return proc.returncode, proc.stdout + proc.stderr
 
 
@@ -39,7 +39,7 @@ def test_the_same_gate_goes_green_on_a_real_test(tmp_path, no_pytest):
         "class T(unittest.TestCase):\n"
         "    def test_ok(self):\n"
         "        self.assertEqual(1, 1)\n"
-    )
+    , encoding="utf-8")
     code, _ = run_gate(build.starter_gate(str(tmp_path)), tmp_path)
     assert code == 0
 
@@ -50,25 +50,29 @@ def test_a_failing_test_keeps_it_red(tmp_path, no_pytest):
         "class T(unittest.TestCase):\n"
         "    def test_no(self):\n"
         "        self.assertEqual(1, 2)\n"
-    )
+    , encoding="utf-8")
     code, _ = run_gate(build.starter_gate(str(tmp_path)), tmp_path)
     assert code != 0
 
 
 def test_the_fallback_survives_a_python_path_with_spaces(tmp_path, no_pytest, monkeypatch):
+    # The gate runs through the platform's shell: sh takes single quotes,
+    # cmd.exe only double quotes.
     monkeypatch.setattr("duet.build.sys.executable", "/opt/some where/python3")
-    command = build.starter_gate(str(tmp_path))
-    assert "'/opt/some where/python3'" in command
+    monkeypatch.setattr("duet.winlaunch.WINDOWS", False)
+    assert "'/opt/some where/python3'" in build.starter_gate(str(tmp_path))
+    monkeypatch.setattr("duet.winlaunch.WINDOWS", True)
+    assert '"/opt/some where/python3"' in build.starter_gate(str(tmp_path))
 
 
 def test_an_existing_project_shape_wins_over_the_python_fallback(tmp_path, monkeypatch):
     monkeypatch.setattr("duet.build.shutil.which", lambda name: "/usr/bin/" + name)
-    (tmp_path / "package.json").write_text("{}")
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
     assert build.starter_gate(str(tmp_path)) == "npm test"
 
 
 def test_a_starter_is_not_offered_for_a_runner_that_is_not_installed(tmp_path, no_pytest):
-    (tmp_path / "Cargo.toml").write_text("[package]\n")
+    (tmp_path / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
     # No cargo on this machine, so a `cargo test` gate would fail every round
     # and veto consensus outright. The fallback has to be something runnable.
     assert "cargo" not in build.starter_gate(str(tmp_path))
@@ -131,8 +135,8 @@ def test_an_empty_idea_is_refused_before_any_agent_is_started(tmp_path, capsys):
 
 
 def test_the_gate_line_does_not_claim_an_empty_workspace_when_tests_exist(tmp_path, capsys):
-    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
-    (tmp_path / "test_thing.py").write_text("def test_ok():\n    assert True\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+    (tmp_path / "test_thing.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
     build.announce("pytest -q", "detected")
     out = capsys.readouterr().out
     assert "nothing here to test yet" not in out
@@ -167,13 +171,13 @@ def test_a_conventional_tests_directory_is_actually_found(tmp_path, no_pytest):
         "class T(unittest.TestCase):\n"
         "    def test_ok(self):\n"
         "        self.assertEqual(1, 1)\n"
-    )
+    , encoding="utf-8")
     code, output = run_gate(build.starter_gate(str(tmp_path)), tmp_path)
     assert code == 0, output
 
 
 def test_a_test_file_that_will_not_import_keeps_the_gate_red(tmp_path, no_pytest):
-    (tmp_path / "test_broken.py").write_text("import a_module_that_is_not_installed\n")
+    (tmp_path / "test_broken.py").write_text("import a_module_that_is_not_installed\n", encoding="utf-8")
     code, output = run_gate(build.starter_gate(str(tmp_path)), tmp_path)
     assert code != 0
     # and says which file, rather than reporting "no tests" and blaming the pair
@@ -206,7 +210,7 @@ def test_a_gate_that_passes_an_empty_workspace_is_caught(tmp_path):
 
 
 def test_a_passing_gate_is_fine_once_tests_exist(tmp_path):
-    (tmp_path / "test_x.py").write_text("def test_ok():\n    assert True\n")
+    (tmp_path / "test_x.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
     # The check is "green with nothing to have passed", not "green".
     assert build.gate_proves_nothing("true", str(tmp_path)) is False
 
@@ -222,7 +226,7 @@ def test_an_xcode_project_is_not_called_a_workspace_with_no_tests(tmp_path):
     """
     (tmp_path / "GalleryTests").mkdir()
     (tmp_path / "GalleryTests" / "AppLogicTests.swift").write_text(
-        "final class AppLogicTests: XCTestCase {\n    func testScore() {}\n}\n")
+        "final class AppLogicTests: XCTestCase {\n    func testScore() {}\n}\n", encoding="utf-8")
     assert build.has_tests(str(tmp_path)) is True
     assert build.gate_proves_nothing("true", str(tmp_path)) is False
 
@@ -232,13 +236,13 @@ def test_one_detector_answers_for_both_the_rules_and_the_gate_check(tmp_path):
     for rel in ("Tests/FooTests.swift", "src/CalculatorTests.cs", "lib/widget_test.dart"):
         workspace = tmp_path / rel.replace("/", "_")
         (workspace / rel).parent.mkdir(parents=True)
-        (workspace / rel).write_text("x")
+        (workspace / rel).write_text("x", encoding="utf-8")
         assert build.has_tests(str(workspace)) is True, rel
     empty = tmp_path / "ordinary-source"
     (empty / "Sources").mkdir(parents=True)
-    (empty / "Sources" / "App.swift").write_text("x")
+    (empty / "Sources" / "App.swift").write_text("x", encoding="utf-8")
     (empty / "Contests").mkdir()
-    (empty / "Contests" / "Entry.swift").write_text("x")
+    (empty / "Contests" / "Entry.swift").write_text("x", encoding="utf-8")
     assert build.has_tests(str(empty)) is False
 
 
@@ -276,10 +280,10 @@ def test_a_gate_you_chose_yourself_is_a_warning_not_a_refusal(capsys):
 
 def test_the_summary_names_what_now_exists(tmp_path, capsys):
     """A build ends with a project nobody has seen yet, not just a digest."""
-    (tmp_path / "app.py").write_text("print('hi')\n" * 3)
-    (tmp_path / "test_app.py").write_text("def test_ok():\n    assert True\n")
+    (tmp_path / "app.py").write_text("print('hi')\n" * 3, encoding="utf-8")
+    (tmp_path / "test_app.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
     (tmp_path / ".duet").mkdir()
-    (tmp_path / ".duet" / "noise.py").write_text("x = 1\n")
+    (tmp_path / ".duet" / "noise.py").write_text("x = 1\n", encoding="utf-8")
     (tmp_path / "__pycache__").mkdir()
     (tmp_path / "__pycache__" / "app.pyc").write_bytes(b"\x00\x01")
 
@@ -298,10 +302,10 @@ def test_the_summary_says_nothing_when_nothing_was_built(tmp_path, capsys):
 
 
 def test_the_summary_does_not_count_a_dependency_tree(tmp_path, capsys):
-    (tmp_path / "app.py").write_text("x = 1\n")
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
     for junk in ("node_modules", ".venv"):
         (tmp_path / junk).mkdir()
-        (tmp_path / junk / "vendored.py").write_text("y = 2\n" * 500)
+        (tmp_path / junk / "vendored.py").write_text("y = 2\n" * 500, encoding="utf-8")
     build.summarise(str(tmp_path), 10.0, "")
     out = capsys.readouterr().out
     assert "1 files" in out
@@ -332,7 +336,7 @@ def test_json_mode_keeps_stdout_machine_readable(tmp_path, capsys, monkeypatch):
 
 def test_the_summary_does_not_claim_a_binary_file_has_lines(tmp_path, capsys):
     """A SQLite file a test left behind was reported as "7 lines"."""
-    (tmp_path / "app.py").write_text("x = 1\n")
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
     (tmp_path / "data.db").write_bytes(b"SQLite format 3\x00" + b"\x00" * 3000)
     build.summarise(str(tmp_path), 10.0, "")
     out = capsys.readouterr().out
@@ -361,11 +365,11 @@ def test_the_summary_ends_with_the_command_to_run_what_was_built(tmp_path, capsy
     asks the pair for a "How to run it" section, and the summary prints its
     first command — read from the README, never guessed.
     """
-    (tmp_path / "run.py").write_text("print('hi')\n")
+    (tmp_path / "run.py").write_text("print('hi')\n", encoding="utf-8")
     (tmp_path / "README.md").write_text(
         "# Thing\n\nIntro.\n\n```\npip install nothing\n```\n\n"
         "## How to run it\n\n```sh\n$ python3 run.py   # http://127.0.0.1:8000/\n"
-        "python3 run.py --port 9000\n```\n")
+        "python3 run.py --port 9000\n```\n", encoding="utf-8")
     build.summarise(str(tmp_path), 60.0, "")
     out = capsys.readouterr().out
     assert "run it:" in out
@@ -375,8 +379,8 @@ def test_the_summary_ends_with_the_command_to_run_what_was_built(tmp_path, capsy
 
 
 def test_no_run_section_means_no_guess(tmp_path, capsys):
-    (tmp_path / "app.py").write_text("x = 1\n")
-    (tmp_path / "README.md").write_text("# Thing\n\n```\npython3 app.py\n```\n")
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("# Thing\n\n```\npython3 app.py\n```\n", encoding="utf-8")
     build.summarise(str(tmp_path), 60.0, "")
     assert "run it:" not in capsys.readouterr().out
 

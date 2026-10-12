@@ -1,0 +1,10 @@
+# LF on every platform, Windows checkouts included. A CRLF install.sh makes sh
+# read `set -eu\r` and stop with "set: Illegal option -"; the skill and command
+# files duet installs are compared with what it ships, so they must not change
+# underneath it either.
+* text=auto eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.png binary

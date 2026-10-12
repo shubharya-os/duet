@@ -12,15 +12,22 @@ jobs:
     # that only resolved from one directory. One OS in CI would not have seen
     # any of them.
     runs-on: ${{ matrix.os }}
+    # bash on every OS, Git for Windows' on windows-latest: the steps below are
+    # POSIX shell (`test $? -eq 1`), which the default PowerShell is not.
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.9", "3.11", "3.13"]
         exclude:
           # Keep the matrix small: the middle version on one OS is enough to
           # catch anything the other two would.
           - os: macos-latest
+            python-version: "3.11"
+          - os: windows-latest
             python-version: "3.11"
     steps:
       - uses: actions/checkout@v5
@@ -42,9 +49,11 @@ jobs:
         run: pytest -q
       - name: a plain install provides the duet command
         run: |
-          python -m venv /tmp/plain
-          /tmp/plain/bin/pip install --quiet .
-          /tmp/plain/bin/duet --version
+          python -m venv "$RUNNER_TEMP/plain"
+          # a Windows virtualenv keeps its programs in Scripts, not bin
+          bin="$RUNNER_TEMP/plain/bin"; [ -d "$bin" ] || bin="$RUNNER_TEMP/plain/Scripts"
+          "$bin/python" -m pip install --quiet .
+          "$bin/duet" --version
       - name: the loop runs end to end
         run: duet demo --quiet
       - name: doctor reports honestly with nothing connected

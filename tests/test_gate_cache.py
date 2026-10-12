@@ -34,13 +34,13 @@ def counting_gate(log: Path, code: int = 0) -> str:
 
 
 def runs(log: Path) -> int:
-    return len(log.read_text().splitlines()) if log.exists() else 0
+    return len(log.read_text(encoding="utf-8").splitlines()) if log.exists() else 0
 
 
 def workspace(tmp_path: Path) -> Path:
     ws = tmp_path / "ws"
     ws.mkdir(exist_ok=True)
-    (ws / "app.py").write_text("print('hi')\n")
+    (ws / "app.py").write_text("print('hi')\n", encoding="utf-8")
     return ws
 
 
@@ -64,7 +64,7 @@ def session(ws: Path, gate: str, claude, gpt, **kwargs):
 
 def events(result):
     path = Path(result.session_dir) / "events.jsonl"
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def before_first_turn(result):
@@ -77,7 +77,7 @@ def before_first_turn(result):
 
 
 def cache_entries(ws: Path):
-    return json.loads((ws / ".duet" / "gate-cache.json").read_text())["entries"]
+    return json.loads((ws / ".duet" / "gate-cache.json").read_text(encoding="utf-8"))["entries"]
 
 
 # -- what is stored ---------------------------------------------------------
@@ -143,7 +143,7 @@ def test_the_remembered_result_is_never_what_a_signoff_is_counted_against(tmp_pa
     failing = counting_gate(log, code=1)
     entries = cache_entries(ws)
     entries[0]["command"] = failing
-    (ws / ".duet" / "gate-cache.json").write_text(json.dumps({"version": 1, "entries": entries}))
+    (ws / ".duet" / "gate-cache.json").write_text(json.dumps({"version": 1, "entries": entries}), encoding="utf-8")
 
     orch, result, _ = session(ws, failing, [DONE, DONE], [DONE, DONE], max_rounds=4)
     assert "gate_remembered" in before_first_turn(result)
@@ -160,7 +160,7 @@ def test_a_different_digest_or_command_is_not_reused(tmp_path):
     _, result, _ = session(ws, other_command, [DONE], [DONE])
     assert "gate_start" in before_first_turn(result)
 
-    (ws / "app.py").write_text("print('changed')\n")
+    (ws / "app.py").write_text("print('changed')\n", encoding="utf-8")
     _, result, _ = session(ws, gate, [DONE], [DONE])
     assert "gate_start" in before_first_turn(result)
 
@@ -171,7 +171,7 @@ def test_a_pass_older_than_a_day_is_not_reused(tmp_path):
     session(ws, gate, [DONE], [DONE])
     entries = cache_entries(ws)
     entries[0]["at"] -= 25 * 3600
-    (ws / ".duet" / "gate-cache.json").write_text(json.dumps({"version": 1, "entries": entries}))
+    (ws / ".duet" / "gate-cache.json").write_text(json.dumps({"version": 1, "entries": entries}), encoding="utf-8")
 
     _, result, _ = session(ws, gate, [DONE], [DONE])
     assert "gate_start" in before_first_turn(result)
@@ -183,7 +183,7 @@ def test_a_stored_failure_is_never_reused(tmp_path):
     session(ws, gate, [DONE], [DONE])
     entries = cache_entries(ws)
     entries[0]["ok"] = False
-    (ws / ".duet" / "gate-cache.json").write_text(json.dumps({"version": 1, "entries": entries}))
+    (ws / ".duet" / "gate-cache.json").write_text(json.dumps({"version": 1, "entries": entries}), encoding="utf-8")
 
     _, result, _ = session(ws, gate, [DONE], [DONE])
     assert "gate_start" in before_first_turn(result)
@@ -203,7 +203,7 @@ def test_a_corrupt_cache_is_ignored_not_fatal(tmp_path):
     gate = counting_gate(log)
     for junk in ("{not json", "[]", '{"entries": "nope"}', '{"entries": [7, {"digest": 3}]}'):
         (ws / ".duet").mkdir(exist_ok=True)
-        (ws / ".duet" / "gate-cache.json").write_text(junk)
+        (ws / ".duet" / "gate-cache.json").write_text(junk, encoding="utf-8")
         _, result, _ = session(ws, gate, [DONE], [DONE])
         assert result.status == STATUS_CONSENSUS
         assert "gate_start" in before_first_turn(result)
@@ -278,12 +278,12 @@ def test_resume_reuses_a_pass_and_fresh_gate_makes_it_rerun(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "remembered from" in out
     resumed = sorted(p for p in (ws / ".duet" / "sessions").iterdir())[-1]
-    kinds = [json.loads(l)["kind"] for l in (resumed / "events.jsonl").read_text().splitlines()]
+    kinds = [json.loads(l)["kind"] for l in (resumed / "events.jsonl").read_text(encoding="utf-8").splitlines()]
     assert "gate_start" not in kinds[: kinds.index("turn_start")]
 
     main(["resume", "-C", str(ws), "--rounds", "4", "--fresh-gate"])
     resumed = sorted(p for p in (ws / ".duet" / "sessions").iterdir())[-1]
-    kinds = [json.loads(l)["kind"] for l in (resumed / "events.jsonl").read_text().splitlines()]
+    kinds = [json.loads(l)["kind"] for l in (resumed / "events.jsonl").read_text(encoding="utf-8").splitlines()]
     assert "gate_start" in kinds[: kinds.index("turn_start")]
 
 
