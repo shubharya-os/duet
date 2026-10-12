@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.15.0
 
 - The gate no longer runs after a turn that says CONTINUE. Measured on 89
   finished sessions (223 hours of wall time) the gate took 82 hours, 37%; 331
