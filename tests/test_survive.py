@@ -235,7 +235,10 @@ def test_detach_returns_at_once_and_runs_in_its_own_session(tmp_path, capsys):
 
     session_dir = tmp_path / ".duet" / "sessions" / session_id
     events_path = session_dir / "events.jsonl"
-    deadline = time.monotonic() + 5
+    # How long the child may take to start is not what this test is about
+    # (`took < 2` above is): on a loaded machine a fresh interpreter can take
+    # well over 5 s to import duet and write its first event.
+    deadline = time.monotonic() + 30
     pid = None
     while time.monotonic() < deadline and pid is None:
         if events_path.exists():
@@ -282,7 +285,7 @@ def test_detach_on_resume_continues_the_right_session(tmp_path, capsys):
     assert continued_id != "20261011-120000-sig1"
     assert continued_id > "20261011-120000-sig1"
 
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 30
     pid = None
     events_path = tmp_path / ".duet" / "sessions" / continued_id / "events.jsonl"
     while time.monotonic() < deadline and pid is None:
