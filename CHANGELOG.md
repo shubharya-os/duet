@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.0
 
 - A session's record says which duet ran it. `session_start` now carries
   `duet_version` and `python` (the interpreter, so which install), and a
