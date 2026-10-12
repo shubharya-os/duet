@@ -12,7 +12,6 @@ browser still passes rather than reporting a fault in the page.
 
 import base64
 import json
-import shlex
 import struct
 import sys
 from pathlib import Path
@@ -55,21 +54,26 @@ ONE_PIXEL_PNG = base64.b64decode(
     b"zBRqmAAAAAElFTkSuQmCC")
 
 
-@pytest.fixture(scope="module")
-def browser():
-    """One Chrome for the whole module: starting it costs more than every check."""
-    problem = chrome.unsupported_platform()
-    if problem:
-        pytest.skip(problem)
-    try:
-        found = chrome.find_chrome()
-    except SetupError as exc:
-        pytest.skip("no browser to drive: %s" % exc)
-    started = chrome.Browser(chrome=found)
-    try:
-        yield started
-    finally:
-        started.close()
+@pytest.fixture(scope="module", params=[chrome.PIPE, chrome.WEBSOCKET])
+def browser(request):
+    """One Chrome per transport for the whole module: starting it costs more
+    than every check. Every test runs over both, and the transport is set in
+    the environment too, so the ones that go through main() use it as well."""
+    with pytest.MonkeyPatch.context() as env:
+        env.setenv(chrome.TRANSPORT_ENV, request.param)
+        problem = chrome.unsupported_platform()
+        if problem:
+            pytest.skip(problem)
+        try:
+            found = chrome.find_chrome()
+        except SetupError as exc:
+            pytest.skip("no browser to drive: %s" % exc)
+        started = chrome.Browser(chrome=found)
+        assert started.transport == request.param
+        try:
+            yield started
+        finally:
+            started.close()
 
 
 def write_page(tmp_path, name, body="", styles="", raw=""):
@@ -519,7 +523,7 @@ def test_shots_go_where_they_are_asked_to(browser, tmp_path, capsys):
 
 # -- a website session, with the real page check as its gate ----------------
 
-def test_duet_add_on_a_website_is_proven_by_a_page_rule(browser, tmp_path):
+def test_duet_add_on_a_website_is_proven_by_a_page_rule(browser, tmp_path, monkeypatch):
     """Item by item what a website session is meant to do: the pair fixes the
     page and writes the rule that catches it; the harness replays that rule,
     with the real `duet page check`, against the page as it was — where it fails.
@@ -537,11 +541,13 @@ def test_duet_add_on_a_website_is_proven_by_a_page_rule(browser, tmp_path):
     rules = json.dumps({"page": "index.html", "styles": [
         {"selector": ".cta", "property": "min-height", "at_least": 44}]})
 
-    # PYTHONPATH, as the rest of this suite's subprocess gates do it: plain
-    # `<python> -m duet` would find whichever duet is installed in this
-    # interpreter's site-packages, not the one under test.
-    gate = "PYTHONPATH=%s %s -m duet page check index.html --width 375" % (
-        shlex.quote(str(Path(__file__).resolve().parents[1])), shlex.quote(sys.executable))
+    # PYTHONPATH, so `<python> -m duet` finds the duet under test and not
+    # whichever one is installed in this interpreter's site-packages. Set in
+    # the environment the gate inherits, not as a `PYTHONPATH=... cmd` prefix:
+    # that is bash syntax, and cmd.exe runs Windows gates.
+    from duet.winlaunch import quote_for_shell
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[1]))
+    gate = "%s -m duet page check index.html --width 375" % quote_for_shell(sys.executable)
     done = envelope("I would ship this", "DONE", confidence=0.9)
     work = envelope("a real tap target, and the rule that holds it there", "DONE", patches=[
         {"path": "index.html", "content": TEMPLATE.format(

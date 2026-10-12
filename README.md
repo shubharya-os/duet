@@ -558,8 +558,12 @@ the page as it was, and must fail there.
 Chrome is driven over the DevTools protocol on a throwaway profile, with no Node and no
 Playwright — the standard library only. Outside hosts are blocked unless you pass
 `--allow-network`, so a gate's answer never depends on someone else's CDN being up.
-Chrome is found via `DUET_CHROME`, then PATH, then where it installs on macOS and Linux.
-Windows is not supported and says so rather than failing halfway.
+Chrome is found via `DUET_CHROME`, then PATH, then where it installs on macOS, Linux and
+Windows (Program Files, Program Files (x86), LocalAppData). On macOS and Linux duet talks
+to Chrome over `--remote-debugging-pipe`; Windows cannot pass the file descriptors that
+needs, so there Chrome gets a local DevTools port and duet speaks the same protocol over
+a standard-library WebSocket. `DUET_CHROME_TRANSPORT=websocket` (or `pipe`) picks one
+explicitly.
 
 ---
 
@@ -903,7 +907,9 @@ duet status 20261011-120000-9f3a
 Add it to any session-starting command — `run`, `build`, `fix`, `add`,
 `refactor`, `plan`, `resume` — including from inside the `/duet` skill, which is
 exactly where this bites: the agent's own tool call is the shell that was about
-to die with the session in it. Not supported on Windows.
+to die with the session in it. On Windows the session is started as a detached process
+in its own process group (no console to close under it), and the follow-up line is
+`Get-Content -Wait` instead of `tail -f`.
 
 `duet status` with no session id lists the recent ones in this workspace and
 calls out a dead one — no `session_end`, no process still running for it, and

@@ -3,13 +3,16 @@
 A website usually has no test command, so a duet session on one has no gate —
 two models agreeing by argument about CSS neither of them has seen rendered.
 This is the half of the answer that talks to Chrome: find it, start it headless
-on a throwaway profile, speak the DevTools protocol over a pipe, and always
-kill it again. What to *check* once a page is rendered lives in page.py.
+on a throwaway profile, speak the DevTools protocol over a pipe (or, where
+there is no pipe to be had, a WebSocket), and always kill it again. What to *check* once a page is rendered lives in page.py.
 
-Why a pipe and not a websocket: `--remote-debugging-pipe` hands Chrome file
-descriptors 3 and 4 and speaks the same protocol over them, NUL-terminated,
-which json and os.read can do between them. `--remote-debugging-port` would
-mean a websocket client, which the standard library does not have.
+Why a pipe first: `--remote-debugging-pipe` hands Chrome file descriptors 3
+and 4 and speaks the same protocol over them, NUL-terminated, which json and
+os.read can do between them — no port, so nothing else on the machine can
+connect. Windows cannot pass a child descriptors 3 and 4, so there Chrome gets
+`--remote-debugging-port=0` instead, and duet speaks the same protocol over a
+WebSocket (duet/websocket.py, standard library only). DUET_CHROME_TRANSPORT
+picks either one anywhere the pipe works, which is how both are tested.
 
 Every flag here is the answer to something observed rather than a precaution:
 
@@ -34,6 +37,7 @@ Every flag here is the answer to something observed rather than a precaution:
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import select
 import signal
@@ -42,11 +46,13 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+from duet.websocket import Closed, WebSocket, WebSocketError
 
 try:
     import fcntl
-except ImportError:             # pragma: no cover - Windows, where page is refused
+except ImportError:             # pragma: no cover - Windows, which uses the WebSocket
     fcntl = None                # type: ignore[assignment]
 
 
@@ -97,11 +103,20 @@ INSTALL_PATHS = (
 
 ENV_VAR = "DUET_CHROME"
 
-# Flags that make a run reproducible and leave no trace. --remote-debugging-pipe
-# is the one that matters; the rest exist to stop a fresh profile asking a
-# question nobody can answer in a headless browser.
+# How duet talks to Chrome (see choose_transport), and the flag for each.
+TRANSPORT_ENV = "DUET_CHROME_TRANSPORT"
+PIPE = "pipe"
+WEBSOCKET = "websocket"
+TRANSPORTS = (PIPE, WEBSOCKET)
+PIPE_FLAG = "--remote-debugging-pipe"
+# Port 0: Chrome picks a free one and writes it to ACTIVE_PORT_FILE.
+PORT_FLAG = "--remote-debugging-port=0"
+ACTIVE_PORT_FILE = "DevToolsActivePort"
+
+# Flags that make a run reproducible and leave no trace, on top of the
+# transport's own: they exist to stop a fresh profile asking a question nobody
+# can answer in a headless browser.
 BASE_FLAGS = (
-    "--remote-debugging-pipe",
     "--headless=new",
     "--disable-gpu",
     "--no-first-run",
@@ -136,21 +151,88 @@ START_TIMEOUT = 90.0
 SLOW_RETRY_FACTOR = 2.0
 
 
-def unsupported_platform() -> Optional[str]:
-    """Why `duet page` cannot run here at all, or None.
+def _windows() -> bool:
+    return sys.platform.startswith("win")
 
-    Windows has neither the file descriptors this transport hands Chrome nor a
-    process group to kill, so it says so instead of failing halfway through in
-    a way that reads like a broken page.
+
+def choose_transport(env: Optional[Dict[str, str]] = None,
+                     windows: Optional[bool] = None) -> str:
+    """Which way to talk to Chrome: the pipe, or a WebSocket on a local port.
+
+    The pipe where it can work, because it needs no port and nothing else on
+    the machine can connect to it; the WebSocket on Windows, which cannot hand
+    a child file descriptors 3 and 4. DUET_CHROME_TRANSPORT overrides either
+    way, so the WebSocket can be tested where the pipe is the default — but a
+    pipe asked for on Windows, or a name that is neither, is a setup fault
+    rather than something quietly swapped for the other.
     """
-    if sys.platform.startswith("win"):
-        return ("duet page is not supported on Windows: it drives Chrome over "
-                "file descriptors 3 and 4, which is a POSIX-only arrangement. "
-                "It works on macOS and Linux, including WSL.")
+    environ = os.environ if env is None else env
+    windows = _windows() if windows is None else windows
+    chosen = (environ.get(TRANSPORT_ENV) or "").strip().lower()
+    if not chosen:
+        return WEBSOCKET if windows else PIPE
+    if chosen not in TRANSPORTS:
+        raise SetupError("%s is set to %r; it can be %s, or unset."
+                         % (TRANSPORT_ENV, chosen, " or ".join(TRANSPORTS)))
+    if chosen == PIPE and windows:
+        raise SetupError("%s=pipe cannot work on Windows: the pipe transport hands "
+                         "Chrome file descriptors 3 and 4, which Windows cannot pass "
+                         "to a child. Unset it to use the WebSocket transport."
+                         % TRANSPORT_ENV)
+    return chosen
+
+
+def unsupported_platform() -> Optional[str]:
+    """Why `duet page` cannot run as configured here, or None.
+
+    Asked before anything starts, so a transport that cannot work says so as a
+    setup fault instead of failing halfway in a way that reads like a broken page.
+    """
+    try:
+        choose_transport()
+    except SetupError as exc:
+        return str(exc)
     return None
 
 
-def find_chrome(env: Optional[Dict[str, str]] = None) -> str:
+def read_active_port(path: str) -> Optional[Tuple[int, str]]:
+    """(port, browser endpoint path) from a DevToolsActivePort file, or None
+    while it is missing or only half written."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return None
+    if len(lines) < 2 or not lines[0].strip().isdigit() or not lines[1].strip().startswith("/"):
+        return None
+    port = int(lines[0].strip())
+    if not 0 < port < 65536:
+        return None
+    return port, lines[1].strip()
+
+
+def windows_install_paths(env: Optional[Dict[str, str]] = None) -> List[str]:
+    """Where Chrome and Chromium install themselves on Windows.
+
+    Per machine under Program Files (either one, by the installer's bitness),
+    per user under LocalAppData. Read from the environment, because neither
+    folder is at the same place on every machine.
+    """
+    environ = os.environ if env is None else env
+    paths = []
+    for var in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "LocalAppData"):
+        base = (environ.get(var) or environ.get(var.upper()) or "").strip()
+        if not base:
+            continue
+        for vendor in (("Google", "Chrome"), ("Google", "Chrome SxS"), ("Chromium",)):
+            path = ntpath.join(base, *vendor)
+            path = ntpath.join(path, "Application", "chrome.exe")
+            if path not in paths:
+                paths.append(path)
+    return paths
+
+
+def find_chrome(env: Optional[Dict[str, str]] = None, windows: Optional[bool] = None) -> str:
     """The browser to drive: $DUET_CHROME, then PATH, then where it installs.
 
     Raises SetupError — never a page fault — when there is none, and when
@@ -158,6 +240,7 @@ def find_chrome(env: Optional[Dict[str, str]] = None) -> str:
     ignoring an explicit choice is how you end up debugging the wrong browser.
     """
     environ = os.environ if env is None else env
+    windows = _windows() if windows is None else windows
     chosen = (environ.get(ENV_VAR) or "").strip()
     if chosen:
         if os.path.isfile(chosen) and os.access(chosen, os.X_OK):
@@ -172,7 +255,7 @@ def find_chrome(env: Optional[Dict[str, str]] = None) -> str:
         found = shutil.which(name)
         if found:
             return found
-    for path in INSTALL_PATHS:
+    for path in windows_install_paths(environ) if windows else INSTALL_PATHS:
         if os.path.isfile(path) and os.access(path, os.X_OK):
             return path
     raise SetupError(
@@ -204,34 +287,50 @@ class Browser:
     """
 
     def __init__(self, chrome: Optional[str] = None, allow_network: bool = False,
-                 timeout: float = CALL_TIMEOUT, extra_flags: Optional[List[str]] = None):
-        problem = unsupported_platform()
-        if problem:
-            raise SetupError(problem)
+                 timeout: float = CALL_TIMEOUT, extra_flags: Optional[List[str]] = None,
+                 transport: Optional[str] = None):
+        self.transport = transport or choose_transport()
+        if self.transport not in TRANSPORTS:
+            raise SetupError("unknown DevTools transport %r" % self.transport)
         self.chrome = chrome or find_chrome()
         self.timeout = timeout
         self._next_id = 0
-        self._buf = b""
         self._responses: Dict[int, Dict[str, Any]] = {}
         self._events: List[Dict[str, Any]] = []
         self._closed = False
+        self._link: Optional[Any] = None
         self._profile = tempfile.mkdtemp(prefix="duet-chrome-")
         self._log = open(os.path.join(self._profile, "chrome.log"), "w+b")
-
-        to_chrome_r, self._to_chrome_w = os.pipe()
-        self._from_chrome_r, from_chrome_w = os.pipe()
-
-        def child() -> None:               # pragma: no cover - runs post-fork
-            _dup_onto(to_chrome_r, 3)
-            _dup_onto(from_chrome_w, 4)
 
         flags = list(BASE_FLAGS) + ["--user-data-dir=%s" % self._profile]
         if not allow_network:
             flags.append(OFFLINE_FLAG)
         flags += list(extra_flags or [])
+        started = time.time()
+        if self.transport == PIPE:
+            self._start_over_pipe(flags)
+        else:
+            self._start_over_websocket(flags, started)
+        try:
+            self.version = self.call(
+                "Browser.getVersion",
+                timeout=max(self.timeout, START_TIMEOUT - (time.time() - started), 1.0)
+            ).get("product", "")
+        except SetupError:
+            self.close()
+            raise
+
+    def _start_over_pipe(self, flags: List[str]) -> None:
+        to_chrome_r, to_chrome_w = os.pipe()
+        from_chrome_r, from_chrome_w = os.pipe()
+
+        def child() -> None:               # pragma: no cover - runs post-fork
+            _dup_onto(to_chrome_r, 3)
+            _dup_onto(from_chrome_w, 4)
+
         try:
             self.proc = subprocess.Popen(
-                [self.chrome] + flags,
+                [self.chrome, PIPE_FLAG] + flags,
                 stdin=subprocess.DEVNULL, stdout=self._log, stderr=self._log,
                 # close_fds would close the descriptors child() just placed on
                 # 3 and 4: the subprocess module's closing pass runs after
@@ -243,17 +342,50 @@ class Browser:
                 start_new_session=True,
             )
         except OSError as exc:
-            self._cleanup_fds([to_chrome_r, from_chrome_w])
+            self._cleanup_fds([to_chrome_r, from_chrome_w, to_chrome_w, from_chrome_r])
             self._discard_profile()
             raise SetupError("could not start %s: %s" % (self.chrome, exc))
         self._cleanup_fds([to_chrome_r, from_chrome_w])
+        self._link = _PipeLink(to_chrome_w, from_chrome_r)
+
+    def _start_over_websocket(self, flags: List[str], started: float) -> None:
+        """Port 0 lets Chrome pick a free port; it writes the one it picked,
+        and the browser endpoint's path, to DevToolsActivePort in the profile."""
         try:
-            self.version = self.call(
-                "Browser.getVersion", timeout=max(self.timeout, START_TIMEOUT)
-            ).get("product", "")
+            self.proc = subprocess.Popen(
+                [self.chrome, PORT_FLAG] + flags,
+                stdin=subprocess.DEVNULL, stdout=self._log, stderr=self._log,
+                close_fds=True,
+                # A process group to kill on the way out, where there is one.
+                start_new_session=not _windows(),
+            )
+        except OSError as exc:
+            self._discard_profile()
+            raise SetupError("could not start %s: %s" % (self.chrome, exc))
+        try:
+            port, path = self._wait_for_port(started + max(self.timeout, START_TIMEOUT))
+            self._link = _SocketLink(WebSocket.connect("127.0.0.1", port, path,
+                                                       timeout=self.timeout))
+        except (OSError, WebSocketError) as exc:
+            self.close()
+            raise SetupError("could not connect to %s's DevTools port: %s"
+                             % (self._name(), exc))
         except SetupError:
             self.close()
             raise
+
+    def _wait_for_port(self, deadline: float) -> Tuple[int, str]:
+        marker = os.path.join(self._profile, ACTIVE_PORT_FILE)
+        while True:
+            found = read_active_port(marker)
+            if found:
+                return found
+            if self.proc.poll() is not None:
+                raise SetupError(self._died())
+            if time.time() >= deadline:
+                raise NoAnswer("%s did not report a DevTools port within %.0fs"
+                               % (self._name(), max(self.timeout, START_TIMEOUT)))
+            time.sleep(0.05)
 
     # -- context manager --------------------------------------------------
     def __enter__(self) -> "Browser":
@@ -264,35 +396,33 @@ class Browser:
 
     # -- transport --------------------------------------------------------
     def _send(self, message: Dict[str, Any]) -> None:
-        raw = json.dumps(message).encode("utf-8") + b"\0"
-        while raw:
-            try:
-                written = os.write(self._to_chrome_w, raw)
-            except OSError as exc:
-                raise SetupError("%s stopped listening: %s" % (self._name(), exc))
-            raw = raw[written:]
+        if self._link is None:
+            raise SetupError("%s is not connected" % self._name())
+        try:
+            self._link.send(json.dumps(message))
+        except (OSError, EOFError, WebSocketError) as exc:
+            raise SetupError("%s stopped listening: %s" % (self._name(), exc))
 
     def _receive(self, deadline: float, budget: Optional[float] = None) -> Dict[str, Any]:
-        while b"\0" not in self._buf:
+        if self._link is None:
+            raise SetupError("%s is not connected" % self._name())
+        while True:
             left = deadline - time.time()
             if left <= 0:
                 raise NoAnswer("%s did not answer within %.0fs"
                                % (self._name(), budget or self.timeout))
             try:
-                ready, _, _ = select.select([self._from_chrome_r], [], [], min(0.25, left))
-            except (OSError, ValueError) as exc:
-                raise SetupError("%s pipe broke: %s" % (self._name(), exc))
-            if not ready:
-                if self.proc.poll() is not None:
-                    raise SetupError(self._died())
-                continue
-            chunk = os.read(self._from_chrome_r, 1 << 16)
-            if not chunk:
+                raw = self._link.read(min(0.25, left))
+            except EOFError:
                 raise SetupError(self._died())
-            self._buf += chunk
-        raw, _, self._buf = self._buf.partition(b"\0")
+            except (OSError, ValueError, WebSocketError) as exc:
+                raise SetupError("%s %s broke: %s" % (self._name(), self.transport, exc))
+            if raw is not None:
+                break
+            if self.proc.poll() is not None:
+                raise SetupError(self._died())
         try:
-            message = json.loads(raw.decode("utf-8", "replace"))
+            message = json.loads(raw)
         except ValueError as exc:
             raise SetupError("%s sent something that is not JSON: %s" % (self._name(), exc))
         return message if isinstance(message, dict) else {}
@@ -462,9 +592,18 @@ class Browser:
             self._send({"id": self._next_id, "method": "Browser.close", "params": {}})
         except (SetupError, OSError):
             pass
-        self._cleanup_fds([self._to_chrome_w, self._from_chrome_r])
+        if self._link is not None:
+            self._link.close()
         proc = getattr(self, "proc", None)
         if proc is not None:
+            if _windows() and proc.poll() is None:
+                # No process group there: the tree is Chrome's helpers.
+                try:
+                    subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=30)
+                except (OSError, subprocess.SubprocessError):
+                    pass
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
             except (OSError, AttributeError):
@@ -482,6 +621,58 @@ class Browser:
                 except (OSError, subprocess.SubprocessError):
                     pass
         self._discard_profile()
+
+
+class _PipeLink:
+    """DevTools over --remote-debugging-pipe: NUL-terminated JSON on two fds."""
+
+    def __init__(self, to_chrome: int, from_chrome: int):
+        self.to_chrome = to_chrome
+        self.from_chrome = from_chrome
+        self._buf = b""
+
+    def send(self, text: str) -> None:
+        raw = text.encode("utf-8") + b"\0"
+        while raw:
+            written = os.write(self.to_chrome, raw)
+            raw = raw[written:]
+
+    def read(self, timeout: float) -> Optional[str]:
+        """One message, None if none is whole within `timeout`; EOFError at the end."""
+        if b"\0" not in self._buf:
+            ready, _, _ = select.select([self.from_chrome], [], [], timeout)
+            if not ready:
+                return None
+            chunk = os.read(self.from_chrome, 1 << 16)
+            if not chunk:
+                raise EOFError()
+            self._buf += chunk
+            if b"\0" not in self._buf:
+                return None
+        raw, _, self._buf = self._buf.partition(b"\0")
+        return raw.decode("utf-8", "replace")
+
+    def close(self) -> None:
+        Browser._cleanup_fds([self.to_chrome, self.from_chrome])
+
+
+class _SocketLink:
+    """DevTools over --remote-debugging-port: the same JSON, one per text frame."""
+
+    def __init__(self, ws: WebSocket):
+        self.ws = ws
+
+    def send(self, text: str) -> None:
+        self.ws.send_text(text)
+
+    def read(self, timeout: float) -> Optional[str]:
+        try:
+            return self.ws.receive(timeout)
+        except Closed:
+            raise EOFError()
+
+    def close(self) -> None:
+        self.ws.close()
 
 
 class PageTarget:
