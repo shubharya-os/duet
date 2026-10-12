@@ -17,7 +17,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from duet import __version__, gate_cache, make, page, prompts, workflows
 from duet.adapters import build as build_adapter
@@ -333,6 +333,11 @@ class Orchestrator:
         self._remembered: Dict[str, GateResult] = {}
         # Digests whose failed gate has had its one re-run; see gate_for.
         self._rechecked: Set[str] = set()
+        # States whose gate was deliberately not run, and the most recent run
+        # that did happen (digest, result) for the deferral to show. Kept apart
+        # from _gate_cache: nothing is ever counted against a deferral.
+        self._deferred: Dict[str, GateResult] = {}
+        self._last_run: Optional[Tuple[str, GateResult]] = None
         # One warning per session is enough; see _check_gate_is_read_only.
         self._gate_mutation_warned = False
         # The rule this session is held to, if any, beyond the double sign-off.
@@ -463,10 +468,57 @@ class Orchestrator:
         if self.workflow:
             self.workflow.on_gate(self.config.workflow_state, digest, result.ok)
         if self.workspace.gate:
+            self._last_run = (digest, result)
             self.emit("gate_done", ok=result.ok, exit_code=result.exit_code, digest=digest,
                       timed_out=result.timed_out, timeout=result.timeout)
             self._check_gate_is_read_only(digest)
         return result
+
+    def deferred_gate(self, digest: str, why: str) -> GateResult:
+        """The gate for `digest`, deliberately not run, carrying the last run that was."""
+        last_digest, last = self._last_run or ("", None)
+        result = GateResult.deferral(self.workspace.gate or "", why, last, last_digest)
+        self._deferred[digest] = result
+        return result
+
+    def _every_turn(self) -> bool:
+        """Whether the gate runs after every turn: `--gate-every-turn`, no gate
+        to run (a skipped result costs nothing), or a workflow rule that still
+        needs to see each one."""
+        return bool(self.config.gate_every_turn or not self.workspace.gate
+                    or (self.workflow and self.workflow.wants_every_gate(self.config.workflow_state)))
+
+    def gate_after_turn(self, digest: str, verdict: str) -> GateResult:
+        """The gate on the state a turn left — run only if the turn decided something.
+
+        A turn that says CONTINUE has told everyone the work is not finished, so
+        a gate on it reports on half-done work nobody can sign off; measured on
+        real sessions that was over a quarter of all wall time. It is deferred
+        until someone votes DONE (or BLOCKED), unless `--gate-every-turn`.
+        A state already checked keeps its result: deferring means not running.
+        """
+        if verdict in ("DONE", "BLOCKED") or self._every_turn():
+            # recheck: if this turn changed nothing and the gate was red, the
+            # red gets one re-run before it is believed.
+            return self.gate_for(digest, recheck=True)
+        if digest in self._gate_cache:
+            return self._gate_cache[digest]
+        return self.deferred_gate(digest, "the last turn said CONTINUE")
+
+    def round_gate(self, digest: str) -> GateResult:
+        """The gate at the start of a round, after the opening one.
+
+        Run only if a sign-off on this exact state could be counted this round
+        (or `--gate-every-turn`); otherwise the deferral stands, because running
+        it here would quietly undo the saving.
+        """
+        if digest in self._gate_cache:
+            return self._gate_cache[digest]
+        if self._every_turn() or any(s.digest == digest for s in self.state.signoffs.values()):
+            return self.gate_for(digest)
+        if digest in self._deferred:
+            return self._deferred[digest]
+        return self.deferred_gate(digest, "no turn has voted DONE on this state yet")
 
     def opening_gate(self, digest: str) -> GateResult:
         """The gate before round 1: a pass remembered from another session, if any.
@@ -483,6 +535,7 @@ class Orchestrator:
             remembered = gate_cache.recall(self.config.root, digest, self.workspace.gate)
             if remembered is not None:
                 self._remembered[digest] = remembered
+                self._last_run = (digest, remembered)
                 if self.workflow:
                     self.workflow.on_gate(self.config.workflow_state, digest, True)
                 self.emit("gate_remembered", command=remembered.command, digest=digest,
@@ -491,11 +544,14 @@ class Orchestrator:
         return self.gate_for(digest)
 
     def shown_gate(self, digest: str) -> GateResult:
-        """What the agents are shown: this session's run, else a remembered pass."""
+        """What the agents are shown: this session's run, else a remembered pass,
+        else the deferral."""
         if digest in self._gate_cache:
             return self._gate_cache[digest]
         if digest in self._remembered:
             return self._remembered[digest]
+        if digest in self._deferred:
+            return self._deferred[digest]
         return self.gate_for(digest)
 
     def _check_gate_is_read_only(self, before: str) -> None:
@@ -731,9 +787,7 @@ class Orchestrator:
             self.pending_refused[self.state.peer_of(agent)] = refused
 
         digest_after = self.workspace.digest()
-        # recheck: if this turn changed nothing and the gate was red, the red
-        # gets one re-run before it is believed.
-        gate = self.gate_for(digest_after, recheck=True)
+        gate = self.gate_after_turn(digest_after, env.verdict)
 
         record = TurnRecord(
             round=round_no, agent=agent, role=role, envelope=env, digest=digest_after,
@@ -758,7 +812,8 @@ class Orchestrator:
                 record.ingest or "no issue changes",
                 " | %d file(s) written" % len(patch_log) if patch_log else "",
                 " | %d call(s) refused" % len(refused) if refused else "",
-                " | gate %s" % ("PASS on a re-run, possibly flaky" if gate.ok and gate.flaky
+                " | gate %s" % ("deferred (CONTINUE)" if gate.deferred
+                                else "PASS on a re-run, possibly flaky" if gate.ok and gate.flaky
                                 else "PASS" if gate.ok else "TIMED OUT" if gate.timed_out
                                 else "FAIL")
                 if self.workspace.gate else "",
@@ -780,8 +835,10 @@ class Orchestrator:
             resolves=list(env.resolves),
             ingest=record.ingest,
             digest=digest_after,
-            gate_ok=gate.ok,
+            # None, not False: a deferred gate did not fail, it did not run.
+            gate_ok=None if gate.deferred else gate.ok,
             gate_timed_out=gate.timed_out,
+            gate_deferred=bool(gate.deferred),
             message=env.message,
             notes=env.notes,
             refused=refused,
@@ -1114,11 +1171,12 @@ class Orchestrator:
                 peer = self.state.peer_of(agent)
                 digest = self.workspace.digest()
                 # Only the opening check may be remembered from another
-                # session; every later one is this session's own run.
+                # session; every later one is this session's own run, or a
+                # deferral when no sign-off on this state can be counted yet.
                 if round_no == self.start_round:
                     gate = self.opening_gate(digest)
                 else:
-                    gate = self.gate_for(digest)
+                    gate = self.round_gate(digest)
 
                 directive = self.pending_directive.pop(agent, "")
                 if not directive:
@@ -1156,7 +1214,15 @@ class Orchestrator:
                         "envelope.\n\n" + prompts.NORMAL_DIRECTIVE
                     )
 
-                decision = self.state.decide(record.digest, (record.gate or gate).ok, cfg.on_blocked)
+                checked = record.gate or gate
+                if checked.deferred and any(s.digest == record.digest
+                                            for s in self.state.signoffs.values()):
+                    # A sign-off on this state is about to be counted: it is
+                    # counted against a real run on these exact files, never a
+                    # deferral.
+                    checked = self.gate_for(record.digest)
+                decision = self.state.decide(record.digest, checked.ok and not checked.deferred,
+                                             cfg.on_blocked)
                 if decision.kind == "consensus" and (self.workflow or cfg.workflow_state.get("clean_room")):
                     # Both agents agree; the workflow's rule gets the last word,
                     # because it is checked against what happened rather than
@@ -1310,7 +1376,9 @@ class Orchestrator:
                 lines.append("**Claims fixed:** " + ", ".join("`%s`" % i for i in env.resolves))
             if record.patch_log:
                 lines.append("**Files written:** " + "; ".join(record.patch_log))
-            if record.gate and not record.gate.skipped:
+            if record.gate and record.gate.deferred:
+                lines.append("**Gate:** deferred (CONTINUE)")
+            elif record.gate and not record.gate.skipped:
                 lines.append("**Gate:** %s" % (record.gate.flaky if record.gate.ok and record.gate.flaky
                                                else "passed" if record.gate.ok else "FAILED"))
             lines.append("**Workspace:** `%s`" % record.digest[:8])

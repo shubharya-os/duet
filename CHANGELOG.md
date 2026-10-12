@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- The gate no longer runs after a turn that says CONTINUE. Measured on 89
+  finished sessions (223 hours of wall time) the gate took 82 hours, 37%; 331
+  runs, 65.7 hours, came right after a CONTINUE — a report on half-done work
+  nobody could sign off — against 10.2 hours after DONE. In sessions with slow
+  gates (UI tests, iOS builds) the gate was 55-82% of the session.
+- It still runs before round one, after any DONE or BLOCKED turn, before any
+  sign-off is counted (so consensus is only ever reached on a state whose gate
+  ran and passed on those exact files), at the end for the report, and after
+  every turn of a `fix` session until the bug has been seen red. The flaky-gate
+  re-run applies to every run that happens.
+- A deferred gate has its own representation and is never a pass — not for
+  consensus, the workflow rules, `.duet/gate-cache.json` or the final-check
+  directive. The next agent is told the gate was not run on this state and why,
+  shown the most recent result that did run and which state it was for, and
+  told it can run targeted tests itself. The terminal and the report's history
+  say "gate deferred (CONTINUE)", and `turn_done` records `gate_deferred: true`
+  with `gate_ok: null`.
+- `--gate-every-turn` on every session command restores the old behaviour. It
+  is saved with the session and kept by `duet resume`.
+
 ## 0.14.0
 
 - A session's record says which duet ran it. `session_start` now carries

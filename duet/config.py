@@ -136,6 +136,10 @@ class Config:
     # Seconds. Saved with the session like `turn_timeout`, so `--gate-timeout`
     # given to a session is kept by `duet resume`.
     gate_timeout: int = DEFAULT_GATE_TIMEOUT
+    # `--gate-every-turn`: run the gate after every turn, as duet used to. By
+    # default a turn that says CONTINUE leaves its gate deferred until someone
+    # votes DONE. Saved with the session, so `duet resume` keeps it.
+    gate_every_turn: bool = False
     # How long one agent's turn may take, in seconds. 0 means each backend's own
     # default. It is on the config — not only on the agent options — so that
     # `--turn-timeout` is saved with the session and `duet resume` keeps it;

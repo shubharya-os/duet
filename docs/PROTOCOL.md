@@ -99,13 +99,17 @@ sign-off that came before it, including the voter's own. This is what makes
 
 ## The acceptance gate
 
-`--gate "<shell command>"` runs in the workspace after every turn whose state id
-changed, with results cached per state id so it is not re-run needlessly. Both agents
-are shown the real command, the real exit code and the real output (trimmed at both
-ends if long).
+`--gate "<shell command>"` runs in the workspace before round one, after every turn
+that votes DONE or BLOCKED, before any sign-off is counted, and once at the end, with
+results cached per state id so it is not re-run needlessly. After a turn that says
+CONTINUE it is deferred: the next agent is told it did not run on that state, and is
+shown the most recent result that did run and which state it was for.
+`--gate-every-turn` runs it after every turn. Both agents are shown the real command,
+the real exit code and the real output (trimmed at both ends if long).
 
-The gate is not advisory. `consensus_reached()` returns false while it fails, no
-matter what either agent votes. Neither agent is ever asked whether the gate passed.
+The gate is not advisory. `consensus_reached()` returns false while it fails or has
+not run on the state being signed, no matter what either agent votes. Neither agent is
+ever asked whether the gate passed.
 
 ## Turn structure
 

@@ -67,6 +67,11 @@ FRESH_GATE_HELP = (
     "for these exact files and this command from the last 24 hours. Sign-offs are "
     "always counted against a gate run during the session, with or without it."
 )
+GATE_EVERY_TURN_HELP = (
+    "run the gate after every turn. By default a turn that says CONTINUE leaves "
+    "the gate deferred until someone votes DONE; it always runs before a sign-off "
+    "is counted."
+)
 DETACH_HELP = (
     "start this as its own process group and return at once, printing the "
     "session id and log path — so the shell that launched it (an agent's tool "
@@ -122,7 +127,8 @@ def make_reporter(agents: List[str], verbose: bool = True, as_json: bool = False
                 ui.agent_tag(event["agent"], agents),
                 ui.verdict_tag(event.get("verdict", "")),
                 ui.dim("state %s%s" % (str(event.get("digest", ""))[:8],
-                                       "" if event.get("gate_ok", True)
+                                       ", gate deferred (CONTINUE)" if event.get("gate_deferred")
+                                       else "" if event.get("gate_ok", True)
                                        else ", gate TIMED OUT" if event.get("gate_timed_out")
                                        else ", gate FAILING")),
             ))
@@ -367,6 +373,8 @@ def build_config(args: argparse.Namespace) -> Config:
     if getattr(args, "allow_run", ""):
         cfg.allow_run = args.allow_run
     cfg.fresh_gate = bool(getattr(args, "fresh_gate", False))
+    if getattr(args, "gate_every_turn", False):
+        cfg.gate_every_turn = True
     if getattr(args, "quick", False):
         cfg.workflow_state["quick"] = True
     # `duet make`: the must-haves a plan has to name, and the references a
@@ -1798,7 +1806,9 @@ def cmd_status(args: argparse.Namespace) -> int:
                          for a in agents},
             "waiting_on": (last_event.get("agent") if running and last_event.get("kind") == "turn_start" else None),
             "seconds_since_last_event": age,
-            "gate_ok": next((t.get("gate_ok") for t in reversed(turns)), None),
+            # The last turn whose gate ran: a deferred one records None.
+            "gate_ok": next((t.get("gate_ok") for t in reversed(turns)
+                             if t.get("gate_ok") is not None), None),
             "duet_version": start.get("duet_version"),
         }, default=str))
         return 0 if not running and (end or {}).get("status") == STATUS_CONSENSUS else (0 if running else 1)
@@ -2239,6 +2249,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
     # Never carried over: whether to trust a remembered pass is a choice about
     # this run, and a resume is usually over files nobody has touched since.
     cfg.fresh_gate = bool(getattr(args, "fresh_gate", False))
+    # Kept from the saved session; the flag can only turn it on.
+    if getattr(args, "gate_every_turn", False):
+        cfg.gate_every_turn = True
 
     reason, fixes = _resume_blocker(data, path.name, cfg.max_rounds)
     if reason:
@@ -2765,6 +2778,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--turn-timeout", type=int, metavar="MINUTES", help=TURN_TIMEOUT_HELP)
     p_run.add_argument("--gate-timeout", type=int, metavar="MINUTES", help=GATE_TIMEOUT_HELP)
     p_run.add_argument("--fresh-gate", action="store_true", help=FRESH_GATE_HELP)
+    p_run.add_argument("--gate-every-turn", action="store_true", help=GATE_EVERY_TURN_HELP)
     p_run.add_argument("--max-debate", type=int, help="rounds an issue may stay open before arbitration (default 3)")
     p_run.add_argument(
         "--pair",
@@ -2803,6 +2817,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--turn-timeout", type=int, metavar="MINUTES", help=TURN_TIMEOUT_HELP)
         p.add_argument("--gate-timeout", type=int, metavar="MINUTES", help=GATE_TIMEOUT_HELP)
         p.add_argument("--fresh-gate", action="store_true", help=FRESH_GATE_HELP)
+        p.add_argument("--gate-every-turn", action="store_true", help=GATE_EVERY_TURN_HELP)
         p.add_argument("--max-debate", type=int,
                        help="rounds an issue may stay open before arbitration (default 3)")
         p.add_argument("--pair", metavar="A+B", help="which two agents, and who leads")
@@ -2977,6 +2992,8 @@ def build_parser() -> argparse.ArgumentParser:
                           help=GATE_TIMEOUT_HELP + " Without it, the limit the dead "
                                "session was started with is kept.")
     p_resume.add_argument("--fresh-gate", action="store_true", help=FRESH_GATE_HELP)
+    p_resume.add_argument("--gate-every-turn", action="store_true",
+                          help=GATE_EVERY_TURN_HELP + " A session started with it keeps it.")
     p_resume.add_argument("--rounds", type=int, metavar="N",
                           help="new total round budget, counting the rounds already used")
     p_resume.add_argument("--pair", metavar="A+B",
