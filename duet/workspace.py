@@ -117,9 +117,26 @@ class GateResult:
     # had changed: the one-line warning that the earlier failure may have been
     # the machine, not the code. See Orchestrator.gate_for.
     flaky: str = ""
+    # Set when the gate was deliberately not run on this state: the turn that
+    # produced it said CONTINUE, so nobody can sign it off yet. Not `skipped`,
+    # which means "no gate configured" and counts as green — a deferred gate is
+    # never green. It carries why, and the most recent run that did happen and
+    # the state that run was for, so the reviewer still sees what was failing.
+    deferred: str = ""
+    last_run: Optional["GateResult"] = None
+    last_digest: str = ""
+
+    @classmethod
+    def deferral(cls, command: str, why: str, last_run: Optional["GateResult"] = None,
+                 last_digest: str = "") -> "GateResult":
+        """A gate not run on this state, and why. Never ok."""
+        return cls(command=command, ok=False, exit_code=-1, output="", deferred=why,
+                   last_run=last_run, last_digest=last_digest)
 
     def headline(self) -> str:
         """"PASSED", "FAILED (exit 1)", or that the gate never finished."""
+        if self.deferred:
+            return "NOT RUN on this state — %s" % self.deferred
         if self.ok and self.remembered:
             return "PASSED (%s)" % self.remembered_note()
         if self.ok and self.flaky:
@@ -140,6 +157,9 @@ class GateResult:
 
     def problem(self) -> str:
         """Why this gate does not count as green, in the agents' words."""
+        if self.deferred:
+            return ("the gate has not run on this state (%s); it runs when someone votes DONE"
+                    % self.deferred)
         if self.timed_out:
             return (self.timeout_note() + ", but it does not count as green until "
                     "it finishes (the limit is set with --gate-timeout MINUTES)")
@@ -148,6 +168,15 @@ class GateResult:
     def render(self, limit: int = 3000) -> str:
         if self.skipped:
             return "No acceptance gate configured."
+        if self.deferred:
+            text = ("$ %s\nNOT RUN — the gate was not run on this state because %s. It runs "
+                    "on the state a turn leaves when that turn votes DONE (or BLOCKED), and "
+                    "always before a sign-off is counted. You can run targeted tests "
+                    "yourself within your turn." % (self.command, self.deferred))
+            if self.last_run is None:
+                return text + "\n\nThe gate has not run yet in this session."
+            return "%s\n\nThe most recent gate that did run was on state %s:\n%s" % (
+                text, self.last_digest[:8], self.last_run.render(limit))
         head = self.headline()
         out = self.output.strip()
         if len(out) > limit:

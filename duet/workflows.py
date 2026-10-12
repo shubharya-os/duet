@@ -412,6 +412,15 @@ class Workflow:
     def on_gate(self, state: Dict, digest: str, ok: bool) -> None:
         pass
 
+    def wants_every_gate(self, state: Dict) -> bool:
+        """Does the rule still need to see the gate after every turn?
+
+        The gate is otherwise deferred after a turn that says CONTINUE. A rule
+        that judges by what `on_gate` has seen says so here, for as long as it
+        still needs to see it.
+        """
+        return False
+
     def veto(self, root: str, state: Dict) -> Optional[str]:
         return None
 
@@ -463,6 +472,12 @@ class Fix(Workflow):
             return
         if not ok:
             state["reproduced"] = True
+
+    def wants_every_gate(self, state: Dict) -> bool:
+        # The fallback needs a red seen during the session, and a pair told to
+        # "leave a failing test in place for one turn" leaves it under a
+        # CONTINUE. Once a red has been seen, deferring loses nothing.
+        return not state.get("reproduced")
 
     def veto(self, root: str, state: Dict) -> Optional[str]:
         gone = sorted(set(state.get("baseline_tests", {})) - set(test_files(root)))

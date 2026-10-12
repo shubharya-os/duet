@@ -801,7 +801,7 @@ duet sessions        # every session in this workspace
 ```
 
 Useful flags for `run`: `--gate` (your tests — the most valuable one), `--pair`,
-`--rounds`, `--turn-timeout MINUTES`, `--gate-timeout MINUTES`, `--fresh-gate`, `--accept "what done means"`, `--swap N` to
+`--rounds`, `--turn-timeout MINUTES`, `--gate-timeout MINUTES`, `--fresh-gate`, `--gate-every-turn`, `--accept "what done means"`, `--swap N` to
 trade places, `--commit`, `--json`, `--detach` (run it as its own process and
 return at once — see "Surviving the thing that launched it" below).
 
@@ -818,6 +818,14 @@ it, saved with the session like the turn limit. A gate that runs out of time is
 reported as exactly that — "the gate ran out of time; this is not a test failure",
 to you and to both agents — so nobody goes looking for a failing test that does not
 exist. It still is not a pass: a session cannot end on a gate that never finished.
+
+The gate runs when it decides something: before round one, after a turn that votes
+DONE or BLOCKED, before any sign-off is counted, and once at the end for the report.
+After a turn that says CONTINUE it is deferred — the terminal and the report say
+"gate deferred (CONTINUE)", and the next agent is shown the most recent result that
+did run and which state it was for. A deferred gate is never a pass, so the pair
+still cannot finish without a green run on the exact files they signed.
+`--gate-every-turn` runs it after every turn as before, and is saved with the session.
 
 A gate that passes is remembered in `.duet/gate-cache.json`, keyed by the digest of
 the workspace and the exact gate command, with when it ran, how long it took and its

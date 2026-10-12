@@ -73,7 +73,7 @@ def _entries(root: str) -> List[Dict[str, Any]]:
 
 def remember(root: str, digest: str, result: GateResult, at: Optional[float] = None) -> None:
     """Keep a pass for this digest and command. Anything else is not kept."""
-    if not result.ok or result.skipped or result.timed_out or not result.command:
+    if not result.ok or result.skipped or result.timed_out or result.deferred or not result.command:
         return
     entry = {
         "digest": digest,
