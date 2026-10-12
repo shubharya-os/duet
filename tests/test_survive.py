@@ -304,17 +304,6 @@ def test_detach_on_resume_continues_the_right_session(tmp_path, capsys):
         time.sleep(0.2)
 
 
-def test_detach_is_refused_on_windows(monkeypatch, tmp_path, capsys):
-    import duet.cli as cli_module
-
-    monkeypatch.setattr(cli_module.os, "name", "nt")
-    code = main(["run", "x", "-C", str(tmp_path), "--pair", "mock+mock", "--detach"])
-    out = capsys.readouterr().out
-    assert code != 0
-    assert "not supported on Windows" in out
-    assert not (tmp_path / ".duet" / "sessions").exists()
-
-
 def test_status_shows_why_a_detached_session_never_started(tmp_path, capsys):
     sessions = tmp_path / ".duet" / "sessions"
     sessions.mkdir(parents=True)

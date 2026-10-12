@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- `--detach` works on Windows. It used to exit 3. The session now starts as a
+  new process with `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`, inherits no
+  console or handles other than its log, and the launcher prints the same
+  session id, log path and follow-up commands as on Unix (`Get-Content -Wait`
+  instead of `tail -f`) and returns at once. `duet status` checks whether
+  the process is still alive with `OpenProcess`/`GetExitCodeProcess` through
+  ctypes, falling back to `tasklist`. It never uses `os.kill(pid, 0)`, which
+  on Windows terminates the process.
+- `duet page` works on Windows. It used to exit 3. Chrome's
+  `--remote-debugging-pipe` needs file descriptors 3 and 4, so on Windows
+  Chrome starts with `--remote-debugging-port=0`, duet reads the port from
+  `DevToolsActivePort` in the throwaway profile, and speaks the same DevTools
+  protocol over a WebSocket client written with the standard library only
+  (`duet/websocket.py`). macOS and Linux keep the pipe.
+  `DUET_CHROME_TRANSPORT=websocket|pipe` overrides the choice, and asking for
+  the pipe on Windows is a setup fault (exit 3). The real-Chrome tests run over
+  both transports. On Windows, Chrome is also looked for under Program Files,
+  Program Files (x86) and LocalAppData.
+
 ## 0.12.0
 
 - Fixed: the 11 tests still failing on windows-latest after the first round.

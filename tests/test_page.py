@@ -63,23 +63,130 @@ def test_chrome_is_found_where_it_installs_when_path_has_nothing(monkeypatch, tm
     installed.chmod(0o755)
     monkeypatch.setattr("duet.chrome.shutil.which", lambda name: None)
     monkeypatch.setattr(chrome, "INSTALL_PATHS", (str(tmp_path / "gone"), str(installed)))
-    assert chrome.find_chrome({}) == str(installed)
+    assert chrome.find_chrome({}, windows=False) == str(installed)
 
 
 def test_no_chrome_at_all_is_a_setup_fault_naming_the_way_out(monkeypatch):
     monkeypatch.setattr("duet.chrome.shutil.which", lambda name: None)
     monkeypatch.setattr(chrome, "INSTALL_PATHS", ())
     with pytest.raises(SetupError) as caught:
-        chrome.find_chrome({})
+        chrome.find_chrome({}, windows=False)
     message = str(caught.value)
     assert "no Chrome" in message
     assert "DUET_CHROME" in message
 
 
-def test_windows_is_told_so_rather_than_failing_halfway(monkeypatch):
+# -- Chrome on Windows -------------------------------------------------------
+# A faked filesystem: only the paths in `present` exist, and they are Windows
+# paths whatever this machine is.
+
+WINDOWS_ENV = {
+    "ProgramFiles": r"C:\Program Files",
+    "ProgramFiles(x86)": r"C:\Program Files (x86)",
+    "LOCALAPPDATA": r"C:\Users\runner\AppData\Local",
+}
+
+
+def fake_filesystem(monkeypatch, present):
+    monkeypatch.setattr("duet.chrome.shutil.which", lambda name: None)
+    monkeypatch.setattr("duet.chrome.os.path.isfile", lambda path: path in present)
+    monkeypatch.setattr("duet.chrome.os.access", lambda path, mode: path in present)
+
+
+@pytest.mark.parametrize("installed", [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    r"C:\Users\runner\AppData\Local\Google\Chrome\Application\chrome.exe",
+    r"C:\Users\runner\AppData\Local\Chromium\Application\chrome.exe",
+])
+def test_chrome_is_found_where_it_installs_on_windows(monkeypatch, installed):
+    fake_filesystem(monkeypatch, {installed})
+    assert chrome.find_chrome(WINDOWS_ENV, windows=True) == installed
+
+
+def test_the_machine_wide_install_on_windows_comes_before_the_per_user_one(monkeypatch):
+    machine = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    user = r"C:\Users\runner\AppData\Local\Google\Chrome\Application\chrome.exe"
+    fake_filesystem(monkeypatch, {machine, user})
+    assert chrome.find_chrome(WINDOWS_ENV, windows=True) == machine
+
+
+def test_path_and_duet_chrome_still_come_first_on_windows(monkeypatch):
+    installed = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    chosen = r"D:\tools\chromium\chrome.exe"
+    fake_filesystem(monkeypatch, {installed, chosen})
+    assert chrome.find_chrome(dict(WINDOWS_ENV, DUET_CHROME=chosen), windows=True) == chosen
+    monkeypatch.setattr("duet.chrome.shutil.which",
+                        lambda name: r"E:\bin\chrome.EXE" if name == "chrome" else None)
+    assert chrome.find_chrome(WINDOWS_ENV, windows=True) == r"E:\bin\chrome.EXE"
+
+
+def test_no_chrome_on_windows_is_the_same_setup_fault(monkeypatch):
+    fake_filesystem(monkeypatch, set())
+    with pytest.raises(SetupError) as caught:
+        chrome.find_chrome(WINDOWS_ENV, windows=True)
+    assert "no Chrome" in str(caught.value)
+
+
+def test_the_unix_install_paths_are_not_looked_for_on_windows(monkeypatch):
+    fake_filesystem(monkeypatch, set(chrome.INSTALL_PATHS))
+    with pytest.raises(SetupError):
+        chrome.find_chrome(WINDOWS_ENV, windows=True)
+
+
+# -- which transport ---------------------------------------------------------
+
+@pytest.mark.parametrize("windows, expected", [(False, "pipe"), (True, "websocket")])
+def test_the_transport_is_the_pipe_except_on_windows(windows, expected):
+    assert chrome.choose_transport({}, windows=windows) == expected
+
+
+@pytest.mark.parametrize("value", ["websocket", "WebSocket ", "pipe"])
+def test_the_transport_can_be_chosen_off_windows(value):
+    assert chrome.choose_transport({chrome.TRANSPORT_ENV: value}, windows=False) == \
+        value.strip().lower()
+
+
+def test_the_websocket_can_be_chosen_on_windows_too():
+    assert chrome.choose_transport({chrome.TRANSPORT_ENV: "websocket"}, windows=True) == \
+        "websocket"
+
+
+def test_the_pipe_asked_for_on_windows_is_a_setup_fault_not_a_swap():
+    with pytest.raises(SetupError) as caught:
+        chrome.choose_transport({chrome.TRANSPORT_ENV: "pipe"}, windows=True)
+    assert "Windows" in str(caught.value)
+
+
+def test_a_transport_that_does_not_exist_is_a_setup_fault():
+    with pytest.raises(SetupError) as caught:
+        chrome.choose_transport({chrome.TRANSPORT_ENV: "carrier-pigeon"}, windows=False)
+    assert chrome.TRANSPORT_ENV in str(caught.value)
+
+
+def test_windows_is_no_longer_refused(monkeypatch):
+    monkeypatch.delenv(chrome.TRANSPORT_ENV, raising=False)
     monkeypatch.setattr(chrome.sys, "platform", "win32")
-    problem = chrome.unsupported_platform()
-    assert problem and "Windows" in problem
+    assert chrome.unsupported_platform() is None
+
+
+def test_a_bad_transport_is_refused_before_chrome_starts(monkeypatch, capsys):
+    monkeypatch.setenv(chrome.TRANSPORT_ENV, "carrier-pigeon")
+    monkeypatch.setattr(chrome, "find_chrome",
+                        lambda *a, **k: pytest.fail("looked for Chrome anyway"))
+    assert page.check_cmd(args(page="landing.html")) == 3
+    assert chrome.TRANSPORT_ENV in capsys.readouterr().err
+
+
+def test_the_port_file_is_read_only_once_it_is_whole(tmp_path):
+    marker = tmp_path / "DevToolsActivePort"
+    assert chrome.read_active_port(str(marker)) is None
+    marker.write_text("51234", encoding="utf-8")
+    assert chrome.read_active_port(str(marker)) is None
+    marker.write_text("51234\n/devtools/browser/0f1e-2d3c\n", encoding="utf-8")
+    assert chrome.read_active_port(str(marker)) == (51234, "/devtools/browser/0f1e-2d3c")
+    marker.write_text("0\n/devtools/browser/x\n", encoding="utf-8")
+    assert chrome.read_active_port(str(marker)) is None
 
 
 def test_check_on_windows_is_exit_3(monkeypatch, capsys):

@@ -55,21 +55,26 @@ ONE_PIXEL_PNG = base64.b64decode(
     b"zBRqmAAAAAElFTkSuQmCC")
 
 
-@pytest.fixture(scope="module")
-def browser():
-    """One Chrome for the whole module: starting it costs more than every check."""
-    problem = chrome.unsupported_platform()
-    if problem:
-        pytest.skip(problem)
-    try:
-        found = chrome.find_chrome()
-    except SetupError as exc:
-        pytest.skip("no browser to drive: %s" % exc)
-    started = chrome.Browser(chrome=found)
-    try:
-        yield started
-    finally:
-        started.close()
+@pytest.fixture(scope="module", params=[chrome.PIPE, chrome.WEBSOCKET])
+def browser(request):
+    """One Chrome per transport for the whole module: starting it costs more
+    than every check. Every test runs over both, and the transport is set in
+    the environment too, so the ones that go through main() use it as well."""
+    with pytest.MonkeyPatch.context() as env:
+        env.setenv(chrome.TRANSPORT_ENV, request.param)
+        problem = chrome.unsupported_platform()
+        if problem:
+            pytest.skip(problem)
+        try:
+            found = chrome.find_chrome()
+        except SetupError as exc:
+            pytest.skip("no browser to drive: %s" % exc)
+        started = chrome.Browser(chrome=found)
+        assert started.transport == request.param
+        try:
+            yield started
+        finally:
+            started.close()
 
 
 def write_page(tmp_path, name, body="", styles="", raw=""):

@@ -383,19 +383,171 @@ def test_a_stuck_walkthrough_is_still_killed_without_killpg(monkeypatch, tmp_pat
     assert walk.timed_out
 
 
-def test_detach_is_a_setup_fault_on_windows_not_a_bad_argument(monkeypatch, capsys):
-    """`--detach` needs `start_new_session`'s POSIX session-leader behaviour,
-    which Windows has no equivalent for — refused with exit 3, the code this
-    suite uses throughout for "the platform cannot do this", not 2, which
-    means a bad argument."""
-    import argparse
+class _Recorder:
+    """Stands in for subprocess.Popen: remembers what it was asked to start."""
 
-    from duet import cli
+    def __init__(self):
+        self.calls = []
 
-    monkeypatch.setattr(cli.os, "name", "nt")
-    code = cli.cmd_detach(["run", "x", "--detach"], argparse.Namespace(command="run"))
-    assert code == 3
-    assert "not supported on Windows" in capsys.readouterr().out
+    def __call__(self, argv, **kwargs):
+        self.calls.append((argv, kwargs))
+        return object()
+
+
+def test_detach_on_windows_starts_a_detached_process_group(monkeypatch, tmp_path, capsys):
+    """No session leader on Windows: the child gets no console
+    (DETACHED_PROCESS), its own process group (so a Ctrl+Break to the
+    launcher's group misses it), no handles but the three it is given, and
+    the session's log as its output. The launcher returns at once with the
+    same id, log and follow-up commands it prints elsewhere."""
+    from duet import cli, winlaunch
+
+    monkeypatch.setattr(winlaunch, "WINDOWS", True)
+    started = _Recorder()
+    monkeypatch.setattr(cli.subprocess, "Popen", started)
+    monkeypatch.chdir(tmp_path)
+
+    code = cli.main(["run", "x", "--pair", "mock+mock", "--detach", "--allow-nested"])
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert len(started.calls) == 1
+    argv, kwargs = started.calls[0]
+    assert argv[:3] == [sys.executable, "-m", "duet"] and "--detach" not in argv
+    assert kwargs["creationflags"] & 0x00000008, "not DETACHED_PROCESS"
+    assert kwargs["creationflags"] & 0x00000200, "not CREATE_NEW_PROCESS_GROUP"
+    assert "start_new_session" not in kwargs
+    assert kwargs["close_fds"] is True
+    assert kwargs["stdin"] == subprocess.DEVNULL
+    assert kwargs["stderr"] == subprocess.STDOUT
+    session_id = kwargs["env"]["DUET_FORCE_SESSION_ID"]
+    log = tmp_path / ".duet" / "sessions" / (session_id + ".log")
+    assert Path(kwargs["stdout"].name).resolve() == log.resolve()
+    assert log.exists()
+    assert session_id in out and str(log.resolve()) in out
+    assert "Get-Content -Wait" in out and "tail -f" not in out
+    assert "duet status %s" % session_id in out
+
+
+def test_detach_off_windows_is_still_a_new_session(monkeypatch, tmp_path, capsys):
+    from duet import cli, winlaunch
+
+    monkeypatch.setattr(winlaunch, "WINDOWS", False)
+    started = _Recorder()
+    monkeypatch.setattr(cli.subprocess, "Popen", started)
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["run", "x", "--pair", "mock+mock", "--detach", "--allow-nested"]) == 0
+    _, kwargs = started.calls[0]
+    assert kwargs["start_new_session"] is True
+    assert "creationflags" not in kwargs
+    assert "tail -f" in capsys.readouterr().out
+
+
+class _FakeKernel32:
+    """OpenProcess / GetExitCodeProcess / CloseHandle, answering as told.
+
+    `processes` maps a pid to its exit code (259 is STILL_ACTIVE); a pid not in
+    it does not exist, and one mapped to None is someone else's (access denied).
+    """
+
+    class _Fn:
+        def __init__(self, fn):
+            self.fn = fn
+
+        def __call__(self, *args):
+            return self.fn(*args)
+
+    def __init__(self, processes, last_error):
+        self.processes = processes
+        self.last_error = last_error
+        self.opened = {}
+        self.closed = []
+        self.OpenProcess = self._Fn(self._open)
+        self.GetExitCodeProcess = self._Fn(self._exit_code)
+        self.CloseHandle = self._Fn(self._close)
+
+    def _open(self, access, inherit, pid):
+        if pid not in self.processes:
+            self.last_error[0] = 87          # ERROR_INVALID_PARAMETER
+            return None
+        if self.processes[pid] is None:
+            self.last_error[0] = 5           # ERROR_ACCESS_DENIED
+            return None
+        handle = 1000 + len(self.opened)
+        self.opened[handle] = pid
+        return handle
+
+    def _exit_code(self, handle, ref):
+        ref._obj.value = self.processes[self.opened[handle.value]]
+        return 1
+
+    def _close(self, handle):
+        self.closed.append(handle.value)
+        return 1
+
+
+@pytest.mark.parametrize("processes, alive", [
+    ({4242: 259}, True),          # running
+    ({4242: 0}, False),           # exited, but a handle somewhere keeps it listed
+    ({}, False),                  # no such process
+    ({4242: None}, True),         # exists, belongs to someone else
+])
+def test_process_liveness_on_windows_asks_openprocess(monkeypatch, processes, alive):
+    import ctypes
+
+    from duet import cli, winlaunch
+
+    monkeypatch.setattr(winlaunch, "WINDOWS", True)
+    last_error = [0]
+    kernel32 = _FakeKernel32(processes, last_error)
+    monkeypatch.setattr(cli, "_kernel32", lambda: kernel32)
+    # Windows-only in ctypes, so it may not be there to replace.
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: last_error[0], raising=False)
+    # os.kill(pid, 0) on Windows terminates the process: it must never be asked.
+    monkeypatch.setattr(cli.os, "kill", lambda *a: pytest.fail("os.kill on Windows"))
+
+    assert cli._pid_alive(4242) is alive
+    assert sorted(kernel32.closed) == sorted(kernel32.opened)   # no handle leaks
+
+
+@pytest.mark.parametrize("listing, alive", [
+    ('"python.exe","4242","Console","1","12,345 K"\r\n', True),
+    ('INFO: No tasks are running which match the specified criteria.\r\n', False),
+    ('"python.exe","42420","Console","1","12,345 K"\r\n', False),
+])
+def test_process_liveness_on_windows_falls_back_to_tasklist(monkeypatch, listing, alive):
+    from duet import cli, winlaunch
+
+    monkeypatch.setattr(winlaunch, "WINDOWS", True)
+    monkeypatch.setattr(cli, "_kernel32", lambda: None)
+    asked = []
+
+    def run(argv, **kwargs):
+        asked.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout=listing, stderr="")
+
+    monkeypatch.setattr(cli.subprocess, "run", run)
+    assert cli._pid_alive(4242) is alive
+    assert asked and asked[0][0] == "tasklist" and "PID eq 4242" in asked[0]
+
+
+def test_status_on_windows_calls_a_detached_session_whose_process_is_gone_dead(monkeypatch):
+    import ctypes
+    import time
+
+    from duet import cli, winlaunch
+
+    monkeypatch.setattr(winlaunch, "WINDOWS", True)
+    last_error = [0]
+    monkeypatch.setattr(cli, "_kernel32", lambda: _FakeKernel32({}, last_error))
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: last_error[0], raising=False)
+    events = [{"kind": "session_start", "pid": 4242, "t": time.time()},
+              {"kind": "turn_start", "agent": "a", "round": 1, "t": time.time()}]
+
+    state, doing = cli.classify_session(events)
+    assert state == cli.SESSION_DEAD
+    assert "round 1" in doing
 
 
 def test_duet_invocation_does_not_use_a_posix_env_prefix_on_windows(monkeypatch):

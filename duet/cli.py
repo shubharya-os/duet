@@ -71,7 +71,8 @@ DETACH_HELP = (
     "start this as its own process group and return at once, printing the "
     "session id and log path — so the shell that launched it (an agent's tool "
     "shell, a terminal someone closes) can go away without taking the session "
-    "down. Follow it with: duet status <id>  or  tail -f <log>. POSIX only."
+    "down. Follow it with: duet status <id>  or  tail -f <log> "
+    "(Get-Content -Wait <log> on Windows)."
 )
 
 
@@ -1550,8 +1551,12 @@ def _pid_alive(pid: Any) -> Optional[bool]:
         pid = int(pid)
     except (TypeError, ValueError):
         return None
-    if pid <= 0 or os.name != "posix":
-        return None           # os.kill(pid, 0) on Windows would terminate it
+    if pid <= 0:
+        return None
+    if winlaunch.WINDOWS:
+        return _windows_pid_alive(pid)  # os.kill(pid, 0) there would terminate it
+    if os.name != "posix":
+        return None
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -1561,6 +1566,71 @@ def _pid_alive(pid: Any) -> Optional[bool]:
     except OSError:
         return None
     return True
+
+
+# What OpenProcess and GetExitCodeProcess say, by number: ctypes has no names
+# for them, and these four are all the answer needs.
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_STILL_ACTIVE = 259
+_ERROR_ACCESS_DENIED = 5
+_ERROR_INVALID_PARAMETER = 87
+
+
+def _kernel32() -> Any:
+    """kernel32 through ctypes, or None where there is none (or no ctypes)."""
+    try:
+        import ctypes
+        return ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    except (ImportError, AttributeError, OSError):
+        return None
+
+
+def _windows_pid_alive(pid: int) -> Optional[bool]:
+    """Whether `pid` is a running process on Windows; None if that is unknown.
+
+    Opening the process is the question: no such process is
+    ERROR_INVALID_PARAMETER, someone else's is ERROR_ACCESS_DENIED (so it
+    exists). A handle that opens is not the answer yet — a process that has
+    exited lingers while anything holds a handle to it, so its exit code has
+    to still be STILL_ACTIVE. Without ctypes, tasklist answers the same
+    question more slowly.
+    """
+    kernel32 = _kernel32()
+    if kernel32 is None:
+        return _tasklist_pid_alive(pid)
+    import ctypes
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        error = ctypes.get_last_error()
+        if error == _ERROR_INVALID_PARAMETER:
+            return False
+        if error == _ERROR_ACCESS_DENIED:
+            return True
+        return None
+    try:
+        code = ctypes.c_ulong(0)
+        if not kernel32.GetExitCodeProcess(ctypes.c_void_p(handle), ctypes.byref(code)):
+            return None
+        return code.value == _STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(ctypes.c_void_p(handle))
+
+
+def _tasklist_pid_alive(pid: int) -> Optional[bool]:
+    """The fallback: `tasklist` lists the process, or says it found none."""
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", "PID eq %d" % pid, "/FO", "CSV", "/NH"],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=15,
+            encoding="utf-8", errors="replace",
+        ).stdout or ""
+    except (OSError, subprocess.SubprocessError):
+        return None
+    # A match is a CSV row whose second field is the pid; no match is an
+    # "INFO: No tasks..." line, in whatever language Windows speaks.
+    return any(row.split(",")[1:2] == ['"%d"' % pid] for row in out.splitlines())
 
 
 def _what_it_was_doing(events: List[Dict[str, Any]]) -> str:
@@ -2966,20 +3036,39 @@ def _best_effort_resume_target(root: str, session_arg: Optional[str]) -> Optiona
         return None
 
 
+# The CreateProcess flags --detach needs on Windows. subprocess only defines
+# them there, so they are spelled out for the code (and tests) that build the
+# call on any platform.
+DETACHED_PROCESS = 0x00000008
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+
+
+def _detached_popen_options(windows: bool) -> Dict[str, Any]:
+    """How to start a child that outlives the shell that started it.
+
+    POSIX: `start_new_session` — its own session and process group, detached
+    from the controlling terminal, so SIGHUP never reaches it. Windows has no
+    sessions in that sense; what kills a child there is its console closing,
+    or Ctrl+C/Ctrl+Break sent to the console's process group. DETACHED_PROCESS
+    gives it no console at all, CREATE_NEW_PROCESS_GROUP takes it out of the
+    launcher's group, and close_fds keeps it from inheriting any handle but
+    the three it is given.
+    """
+    if windows:
+        return {"creationflags": DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+                "close_fds": True}
+    return {"start_new_session": True}
+
+
 def cmd_detach(argv: List[str], args: argparse.Namespace) -> int:
-    """Re-exec this same command as its own session leader, and return at once.
+    """Re-exec this same command as a process of its own, and return at once.
 
     The usual way a duet session dies: the shell that launched it — an agent's
     tool shell, a terminal someone closes — goes away and takes the process
-    with it. `start_new_session` makes the child immune to that: it gets its
-    own process group and is detached from the controlling terminal, so SIGHUP
-    never reaches it and closing the launcher's shell cannot touch it either.
+    with it. The child is started so that cannot reach it (see
+    _detached_popen_options), with its output going to the session's log.
     """
-    if os.name != "posix":
-        print(ui.red("✗ ") + "--detach is not supported on Windows; run the command "
-              "without it (it will not die with this shell unless this shell dies).")
-        return 3        # a setup fault — the platform cannot do this, not a bad argument
-
+    windows = winlaunch.WINDOWS
     nested = refuse_nested(getattr(args, "command", "") or "run", args)
     if nested is not None:
         return nested
@@ -3009,7 +3098,7 @@ def cmd_detach(argv: List[str], args: argparse.Namespace) -> int:
             stdin=subprocess.DEVNULL,
             stdout=log_fh,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            **_detached_popen_options(windows),
         )
     finally:
         log_fh.close()
@@ -3017,11 +3106,14 @@ def cmd_detach(argv: List[str], args: argparse.Namespace) -> int:
     here = str(Path.cwd().resolve())
     status_cmd = "duet status %s" % session_id
     if here != root:
-        status_cmd += " -C %s" % shlex.quote(root)
+        status_cmd += " -C %s" % quote_for_shell(root, windows=windows)
+    log_arg = quote_for_shell(str(log_path), windows=windows)
+    # Windows has no tail; PowerShell's Get-Content -Wait is the same thing.
+    follow = ("Get-Content -Wait %s" if windows else "tail -f %s") % log_arg
     print(ui.bold("duet %s" % args.command) + "  " + ui.dim("detached"))
     print("  session: " + ui.bold(session_id))
     print("  log:     " + str(log_path))
-    print("  " + ui.dim("follow it:   ") + ui.bold("tail -f %s" % shlex.quote(str(log_path))))
+    print("  " + ui.dim("follow it:   ") + ui.bold(follow))
     print("  " + ui.dim("check on it: ") + ui.bold(status_cmd))
     return 0
 
