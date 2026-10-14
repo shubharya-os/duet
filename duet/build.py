@@ -33,6 +33,7 @@ from typing import Optional, Tuple
 
 from duet import ui, workflows
 from duet.winlaunch import quote_for_shell
+from duet.workspace import SKIP_DIRS as WORKSPACE_SKIP_DIRS
 
 TASK = """\
 Build this, from nothing, in this directory:
@@ -159,8 +160,9 @@ sys.exit(0 if ok else 1)
 
 RUNNER_PATH = ".duet/gate_unittest.py"
 
-# Directories that are never part of what the pair built.
-SKIP_DIRS = {".duet", ".git", "__pycache__", "node_modules", ".venv", "venv", ".tox"}
+# Directories that are never part of what the pair built — the same set the
+# workspace digest skips, so the summary and the state id agree on what counts.
+SKIP_DIRS = WORKSPACE_SKIP_DIRS
 
 
 # Languages duet can name a test command for, keyed by what the idea says.

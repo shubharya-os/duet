@@ -25,6 +25,10 @@ SKIP_DIRS = {
     ".git", ".duet", "__pycache__", "node_modules", ".venv", "venv",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis", ".tox",
     "dist", "build", ".next", "target", ".idea", ".vscode", ".DS_Store",
+    # Build output and caches that a gate run rewrites. Hashing them moved the
+    # state id on every gate run, so two DONE votes on unchanged source never
+    # landed on the same digest (SwiftPM's .build/ under `swift test`).
+    ".build", ".swiftpm", "DerivedData", ".gradle", ".dart_tool", "Pods",
 }
 DIGEST_CHUNK_BYTES = 1_048_576
 # A new file bigger than this is listed for the reviewer, never inlined: it is
@@ -221,8 +225,14 @@ class Workspace:
         project does, so it has to change the state id too.
         """
         files: List[Path] = []
+        ignored = self._ignored_dirs()
         for dirpath, dirnames, filenames in os.walk(self.root):
-            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+            here = Path(dirpath)
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if d not in SKIP_DIRS
+                and (here / d).relative_to(self.root).as_posix() not in ignored
+            )
             for name in sorted(filenames):
                 if name == ".DS_Store":
                     continue
@@ -307,6 +317,22 @@ class Workspace:
         except (OSError, subprocess.SubprocessError) as exc:
             return 1, str(exc)
         return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+    def _ignored_dirs(self) -> set:
+        """Directories git ignores, as workspace-relative POSIX paths.
+
+        Whatever build tool a project uses, its output directory is usually in
+        .gitignore — and a gate run that rewrites it must not move the state id.
+        Only whole directories are skipped: an ignored single file (a .env the
+        gate reads) still counts, because editing it changes what the project
+        does. Outside a repo, or if git fails, nothing extra is skipped.
+        """
+        code, out = self._git(
+            "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory",
+        )
+        if code != 0:
+            return set()
+        return {entry.rstrip("/") for entry in out.split("\0") if entry.endswith("/")}
 
     @property
     def is_git_repo(self) -> bool:

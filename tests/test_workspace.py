@@ -152,3 +152,44 @@ def test_reviewing_against_a_ref_with_nothing_new(tmp_path):
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-qm", "one")
     assert "does not already have" in Workspace(str(tmp_path)).diff_since("HEAD")
+
+
+def test_a_gate_rewriting_swiftpm_build_output_keeps_the_state_id(tmp_path):
+    """`swift test` rewrites Packages/X/.build/ on every run. When that moved
+    the digest, two DONE votes on unchanged source never matched and a finished
+    session ran out of rounds re-confirming itself."""
+    (tmp_path / "Packages" / "Engine" / "Sources").mkdir(parents=True)
+    (tmp_path / "Packages" / "Engine" / "Sources" / "a.swift").write_text("let x = 1\n", encoding="utf-8")
+    ws = Workspace(str(tmp_path))
+    before = ws.digest()
+    for out in (".build/debug/a.o", ".swiftpm/xcode/x", "DerivedData/Logs/l"):
+        target = tmp_path / "Packages" / "Engine" / out
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("rebuilt", encoding="utf-8")
+    assert ws.digest() == before
+    (tmp_path / "Packages" / "Engine" / "Sources" / "a.swift").write_text("let x = 2\n", encoding="utf-8")
+    assert ws.digest() != before
+
+
+def test_gitignored_directories_do_not_move_the_state_id(tmp_path):
+    _git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_text("generated-output/\n.env\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("A=1\n", encoding="utf-8")
+    ws = Workspace(str(tmp_path))
+    before = ws.digest()
+    (tmp_path / "generated-output").mkdir()
+    (tmp_path / "generated-output" / "bundle.js").write_text("noise", encoding="utf-8")
+    assert ws.digest() == before
+    # An ignored single file still counts: editing it changes what runs.
+    (tmp_path / ".env").write_text("A=2\n", encoding="utf-8")
+    assert ws.digest() != before
+
+
+def test_without_git_only_the_fixed_skip_list_applies(tmp_path):
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    ws = Workspace(str(tmp_path))
+    before = ws.digest()
+    (tmp_path / "generated-output").mkdir()
+    (tmp_path / "generated-output" / "bundle.js").write_text("noise", encoding="utf-8")
+    assert ws.digest() != before

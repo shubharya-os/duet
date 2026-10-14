@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Build output no longer moves the state id. The workspace digest skipped
+  `build/` but not SwiftPM's `.build/`, so every `swift test` gate run rewrote
+  hashed files: two DONE votes on unchanged source never matched, and a
+  finished session ran to its round limit re-confirming itself. `.build`,
+  `.swiftpm`, `DerivedData`, `.gradle`, `.dart_tool` and `Pods` are now skipped.
+- In a git repo, directories git ignores are skipped too, so any build tool's
+  output stays out of the digest. An ignored single file (a `.env` the gate
+  reads) still counts: editing it changes what runs.
+- `duet build`'s end-of-session summary uses the same skip list as the digest.
+
 ## 0.15.0
 
 - The gate no longer runs after a turn that says CONTINUE. Measured on 89
