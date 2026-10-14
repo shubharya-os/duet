@@ -11,6 +11,10 @@
   output stays out of the digest. An ignored single file (a `.env` the gate
   reads) still counts: editing it changes what runs.
 - `duet build`'s end-of-session summary uses the same skip list as the digest.
+- A gate with a quoted assignment in front (`SIM_NAME="iPhone 17" make all`)
+  now allow-lists `make`. The gate was split on spaces, so `17"` was granted
+  instead and Claude Code's `acceptEdits` mode refused every build and test the
+  agent tried, leaving it to edit blind and trust the harness's report.
 
 ## 0.15.0
 
