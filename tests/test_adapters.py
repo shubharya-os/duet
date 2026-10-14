@@ -361,6 +361,14 @@ def test_allowing_the_gate_ignores_a_leading_env_assignment(tmp_path):
     assert agent.allowed_tools == ["Bash(pytest:*)"]
 
 
+def test_allowing_the_gate_steps_over_a_quoted_env_assignment(tmp_path):
+    """`SIM_NAME="iPhone 17" make all` was split on spaces, so `17"` was
+    allow-listed instead of `make` and every build the agent tried was refused."""
+    agent = ClaudeCodeAdapter(name="claude", cwd=str(tmp_path))
+    agent.allow_gate('SIM_NAME="iPhone 17" make all')
+    assert agent.allowed_tools == ["Bash(make:*)"]
+
+
 def test_an_adapter_without_permissions_ignores_the_gate(tmp_path):
     agent = CodexCliAdapter(name="gpt", cwd=str(tmp_path))
     agent.allow_gate("pytest -q")      # codex has its own sandbox; nothing to do

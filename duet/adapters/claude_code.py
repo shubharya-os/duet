@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -151,7 +152,12 @@ class ClaudeCodeAdapter(Adapter):
         the gate actually invokes — and nothing else.
         """
         for segment in re.split(r"&&|\|\||;|\|", gate or ""):
-            parts = segment.strip().split()
+            # Shell-style words, so a quoted assignment (`SIM="iPhone 17" make all`)
+            # is one word to step over, not `17"` mistaken for the command.
+            try:
+                parts = shlex.split(segment)
+            except ValueError:
+                parts = segment.strip().split()
             # step over any leading VAR=value assignments to reach the command
             while parts and "=" in parts[0] and not parts[0].startswith("/"):
                 parts = parts[1:]
