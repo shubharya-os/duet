@@ -167,6 +167,8 @@ def make_reporter(agents: List[str], verbose: bool = True, as_json: bool = False
                 " (%s) — attempt %s of %s failed; retrying in %ss"
                 % (event.get("reason"), event.get("attempt"), event.get("of"),
                    event.get("wait"))))
+        elif kind == "backend_model_fallback":
+            say("  " + ui.yellow(str(event.get("line") or "")))
         elif kind == "turn_cut_off":
             say("  " + ui.yellow("cut off at %s" % event.get("budget"))
                 + ui.dim(" — the workspace changed, so %s carries it on. Not a failed turn."
@@ -735,9 +737,11 @@ def cmd_login(args: argparse.Namespace) -> int:
         # usage allowance fails the probe, and running `codex login` at it opens
         # a browser for nothing and then reports "still not signed in", which is
         # false. doctor at the end of this command reports the real problem.
-        if probe.warning and not args.force:
+        if probe.warning and probe.signed_in is None and not args.force:
             # The check ran out of time. That is not a reason to open a browser,
-            # and not a reason to claim it is signed in either.
+            # and not a reason to claim it is signed in either. (A warning on a
+            # confirmed sign-in — a configured model the login does not list —
+            # is doctor's to report, not a reason to stop here.)
             print(ui.yellow("! ") + "%s: %s" % (name, probe.warning))
             print(ui.dim("    to sign in anyway: duet login --force"))
             continue

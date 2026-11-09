@@ -669,6 +669,17 @@ class Orchestrator:
             edits_workspace=adapter.edits_workspace,
         )
 
+    def _note_model_fallback(self, agent: str, round_no: int, reply: Any) -> None:
+        """Say so when a backend had to run a model other than the one asked
+        for: the pair still has two models, but not the one the user chose."""
+        fallback = reply.meta.get("model_fallback")
+        if not isinstance(fallback, dict):
+            return
+        self.emit("backend_model_fallback", round=round_no, agent=agent,
+                  backend=self.adapters[agent].backend, explicit=bool(fallback.get("explicit")),
+                  line=fallback.get("line"), **{"from": fallback.get("from"), "to": fallback.get("to")})
+        self.history.append("R%-2d %-6s MODEL     %s" % (round_no, agent, fallback.get("line")))
+
     def _send(self, agent: str, prompt: str, system: str, round_no: int):
         """One turn's call, re-sent through a backoff while the failure is the
         network's fault.
@@ -683,6 +694,7 @@ class Orchestrator:
         """
         adapter = self.adapters[agent]
         reply = adapter.send(prompt, system=system, round_no=round_no)
+        self._note_model_fallback(agent, round_no, reply)
         # Parsed before the failure is judged, because a backend can fail
         # *after* the agent has answered and that answer is still worth having.
         # The reverse is what this guards: a CLI's own error banner ("API
@@ -703,6 +715,7 @@ class Orchestrator:
                       error=reply.error[:200])
             self.sleep(delay)
             reply = adapter.send(prompt, system=system, round_no=round_no)
+            self._note_model_fallback(agent, round_no, reply)
             env = parse_envelope(reply.text, agent=agent, round_no=round_no)
             attempts += 1
         if reply.ok or env.parse_ok or reply.timed_out:
@@ -1459,6 +1472,9 @@ class Orchestrator:
             mark = "yes" if signoff and signoff.digest == result.digest else "no"
             lines.append("- **%s** (%s): last verdict `%s`, signed off on this state: **%s**"
                          % (name, self.adapters[name].describe(), verdict, mark))
+        for name in self.config.agent_names:
+            for notice in self.adapters[name].notices():
+                lines.append("- **%s**: %s" % (name, notice))
         if result.gate and not result.gate.skipped:
             lines += ["", "## Acceptance gate", "", "```", result.gate.render(1500), "```"]
             if result.gate.log:

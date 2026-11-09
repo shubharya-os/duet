@@ -266,7 +266,12 @@ class ClaudeCodeAdapter(Adapter):
             meta["refused"] = refused
         if data.get("is_error") or proc.returncode != 0:
             detail = str(data.get("error") or text or stderr or "claude exited %d" % proc.returncode)
-            if "not logged in" in detail.lower() or "/login" in detail.lower():
+            # Only claude's own words name a sign-in problem: its error field,
+            # stderr, or a result it flagged is_error. A result that is not
+            # flagged is the agent's answer, and can say anything.
+            own = " ".join(str(part) for part in (
+                data.get("error") or "", stderr, text if data.get("is_error") else "")).lower()
+            if "not logged in" in own or "/login" in own:
                 detail = "Claude Code is not signed in. Run: %s" % LOGIN_HINT
             return AgentReply(text=str(text), meta=meta, error=detail[:800])
         return AgentReply(text=str(text), meta=meta)
