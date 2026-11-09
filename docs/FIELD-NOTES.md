@@ -71,9 +71,10 @@ Separately, in 61 turns agents complained that the gate output was cut before th
 failure names. The harness kept the first and last parts of a long log, and xcodebuild
 and pytest put the failing test names in the middle.
 
-Both are being fixed together. An agent can ask for a gate run (`"run_gate": true`)
-without ending anything. Failure lines are pulled out of the whole log and shown first,
-and the full log is saved where agents can read it.
+0.16 fixes both. An agent can ask for a gate run (`"run_gate": true`) without ending
+anything, and the prompt keeps BLOCKED for what neither agent can fix. Failure lines are
+pulled out of the whole log and shown first, and the full log is saved where agents can
+read it.
 
 ## Sessions died with whatever launched them
 
@@ -93,9 +94,10 @@ warns when a running session is on another version.
 - Whether duet makes a given model better at coding. Nothing here compares the same
   task with and without duet.
 - How Claude and Codex compare as a pair. Almost every session here was Claude with
-  Claude, partly because a retired model name in the local Codex config made Codex
-  fail. duet now falls back to a model the login serves, instead of quietly running
-  without a second vendor.
+  Claude. Part of the reason was a retired model name in the local Codex config, which
+  made every Codex turn fail. Since 0.16 duet falls back to a model the login serves
+  instead of quietly running without a second vendor. It also no longer reads an agent's
+  own words, such as a review that mentions "not logged in", as a sign-in failure.
 - Anything about teams. One developer, one machine.
 
 The analysis is a few dozen lines of Python over `events.jsonl`. Every duet session
