@@ -67,6 +67,19 @@ def _no_backoff_sleeping(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_wait_polling_sleep(monkeypatch):
+    """`duet wait`'s poll between checks doesn't cost the suite real time.
+
+    Same reasoning as `_no_backoff_sleeping` above: the interval is a plain
+    constant, not something worth sleeping through in a test, and a test that
+    wants to see real waiting happen (e.g. --timeout) overrides this itself.
+    `raising=False` for the same reason: on the snapshot the harness replays
+    these tests against, `duet.cli.WAIT_POLL` does not exist yet.
+    """
+    monkeypatch.setattr("duet.cli.WAIT_POLL", lambda seconds: None, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _own_state_dir(tmp_path_factory, monkeypatch):
     """No test reads or writes the developer's real ~/.duet.
 

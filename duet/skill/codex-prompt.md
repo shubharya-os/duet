@@ -29,7 +29,9 @@ session id and a log path at once instead of streaming:
 
 Poll it with `{{DUET}} status <id>` every so often (it also takes no id, for the newest
 session) until it reports consensus or a problem. `tail -f` the printed log if you want
-to watch it live while you wait.
+to watch it live while you wait. Or just run `{{DUET}} wait <id>`, which blocks until it
+is done and exits 0 on consensus — it watches the event log, not the log text, so an
+agent's own message containing "ERROR" never passes for the session having ended.
 
 If the workspace is empty — no source, no tests, nothing to detect — use `build`
 instead. It sets the gate before any code exists, so it starts red, and orders the work:

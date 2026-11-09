@@ -870,8 +870,21 @@ the workspace and the exact gate command, with when it ran, how long it took and
 output. A session — new or resumed — that opens on the same files with the same
 command within 24 hours skips the opening run and says so: "gate passed (remembered
 from 2026-10-10 09:12 (2 hours ago), same files, same command; --fresh-gate to
-rerun)". Both agents see the remembered output, labelled the same way. That is all
-it does: a failure or a time-out is never remembered, other files or another command
+rerun)". Both agents see the remembered output, labelled the same way.
+
+A gate that fails is remembered the same way, with its exit code and the end of its
+output (at most 20,000 characters per entry), and shown for what it is: "FAILED
+(remembered from a run on these exact files 2026-10-10 09:12 (2 hours ago), 31
+minutes; not re-run …)", in the terminal too. On 0.15.0, 47 of 257 opening gates had
+already run on the identical files with the same command that day, 37 of them failing
+— 30 of 131 opening-gate hours spent re-running a known answer. A remembered failure
+is never evidence for anything: no workflow rule is shown it, and a rule that still
+needs to see the gate red in this session (`fix`, until it has) gets a real run
+instead; `refactor`'s red-start refusal and `build`'s red-before-code check run the
+gate themselves before the session. The flaky re-run applies to real runs only, and a
+failure that passes on its re-run is dropped from the cache.
+
+That is all it does: a time-out is never remembered, other files or another command
 never match, and the gate a sign-off is counted against is always one run during the
 session, so the pair still cannot finish without a fresh green run. `--fresh-gate`
 on any session command or on `duet resume` ignores the cache for that run;
@@ -946,6 +959,7 @@ duet fix "slugify keeps punctuation" --detach
 #   log:     .duet/sessions/20261011-120000-9f3a.log
 #   follow it:   tail -f .duet/sessions/20261011-120000-9f3a.log
 #   check on it: duet status 20261011-120000-9f3a
+#   wait on it:  duet wait 20261011-120000-9f3a
 
 duet status 20261011-120000-9f3a
 ```
@@ -960,8 +974,21 @@ in its own process group (no console to close under it), and the follow-up line 
 `duet status` with no session id lists the recent ones in this workspace and
 calls out a dead one — no `session_end`, no process still running for it, and
 silent for longer than its turn and gate limits allow — as "stopped without
-finishing (process gone)", with what it was doing and the `duet resume` command,
-instead of reporting it as running forever.
+finishing (process gone)", with what it was doing and the `duet resume` command
+to continue it, instead of reporting it as running forever — or, for one that
+never got far enough to save a `state.json` (it died before finishing a turn, so
+there is nothing `duet resume` could carry on from), the same refusal `duet
+resume` would give and the command to start it again, in the status, the
+`--json` output's `"restart"` field, and the recent-sessions list alike.
+
+`duet wait [<id>] [--timeout MINUTES]` blocks until a `--detach`ed session is no
+longer running — finished or dead by the rules above — then prints the same
+final summary `duet status <id>` would, and exits accordingly: `0` on consensus,
+`1` on any other end (exhausted, blocked, error, interrupted, dead), `2` on a
+timeout or if no such session exists. It polls the event log every few seconds
+rather than the session's process, so it is not fooled by an agent's own
+message that happens to contain the word "ERROR" the way a `tail -f | grep
+ERROR` would be.
 
 ---
 

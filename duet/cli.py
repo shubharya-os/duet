@@ -183,6 +183,11 @@ def make_reporter(agents: List[str], verbose: bool = True, as_json: bool = False
                 say("     " + ui.dim("fs: " + line))
         elif kind == "gate_start":
             say("     " + ui.dim("running gate: %s" % event.get("command")))
+        elif kind == "gate_remembered" and event.get("ok") is False:
+            say("     " + ui.red("gate failed (exit %s)" % event.get("exit_code")) + ui.dim(
+                " (remembered from a run on these exact files %s, %s; not re-run;"
+                " --fresh-gate to rerun)"
+                % (event.get("when"), human_duration(event.get("duration") or 0))))
         elif kind == "gate_remembered":
             say("     " + ui.green("gate passed") + ui.dim(
                 " (remembered from %s, same files, same command; --fresh-gate to rerun)"
@@ -377,6 +382,7 @@ def build_config(args: argparse.Namespace) -> Config:
     if getattr(args, "allow_run", ""):
         cfg.allow_run = args.allow_run
     cfg.fresh_gate = bool(getattr(args, "fresh_gate", False))
+    cfg.started_with = [a for a in getattr(args, "started_with", None) or [] if a != "--detach"]
     if getattr(args, "gate_every_turn", False):
         cfg.gate_every_turn = True
     if getattr(args, "quick", False):
@@ -1714,6 +1720,37 @@ def classify_session(events: List[Dict[str, Any]], now: Optional[float] = None) 
     return (SESSION_DEAD if silence > allowed else SESSION_RUNNING), doing
 
 
+def restart_command(start: Dict[str, Any], root: str) -> str:
+    """The command that starts a session again, from its session_start record.
+
+    For a session that died before saving state.json, which `duet resume`
+    refuses: the command line it was started with when that was recorded,
+    otherwise `duet run` with the task, gate and rounds the record has.
+    """
+    argv = [str(a) for a in start.get("started_with") or []]
+    if not argv:
+        task = str(start.get("task") or "").strip()
+        argv = ["run", task or "..."]
+        if start.get("gate"):
+            argv += ["--gate", str(start["gate"])]
+        if start.get("max_rounds"):
+            argv += ["--rounds", str(start["max_rounds"])]
+    command = "duet " + " ".join(shlex.quote(a) for a in argv)
+    if "-C" not in argv and "--root" not in argv and not any(a.startswith("--root=") for a in argv):
+        try:
+            here: Optional[Path] = Path.cwd().resolve()
+        except OSError:
+            here = None
+        if here != Path(root).resolve():
+            command += " -C %s" % shlex.quote(str(Path(root).resolve()))
+    return command
+
+
+def _can_resume(path: Path) -> bool:
+    """Whether `duet resume` has anything to carry on from: a saved state.json."""
+    return _session_state(path) is not None
+
+
 def _print_recent_sessions(sessions: List[Path], root: str, limit: int = 8) -> None:
     """One line per recent session: id, state, and for a dead one how to go on."""
     print(ui.bold("recent sessions") + "  " + ui.dim(str(Path(root).resolve())))
@@ -1730,10 +1767,14 @@ def _print_recent_sessions(sessions: List[Path], root: str, limit: int = 8) -> N
         elif state == SESSION_RUNNING:
             shown = ui.yellow("running") + ui.dim(" " + doing)
             shown += "\n" + " " * 26 + ui.yellow(note) if note else ""
-        else:
+        elif _can_resume(path):
             shown = ui.red(DEAD_LABEL) + ui.dim(" " + doing) \
                 + (ui.dim(" — " + note) if note else "") + "\n" + " " * 26 + \
                 ui.dim("resume: ") + ui.bold(resume_command(path.name, root))
+        else:
+            shown = ui.red(DEAD_LABEL) + ui.dim(" " + doing) \
+                + (ui.dim(" — " + note) if note else "") + "\n" + " " * 26 + \
+                ui.dim("nothing to resume; start again: ") + ui.bold(restart_command(start, root))
         print("  %-24s %s" % (path.name, shown))
     print()
 
@@ -1795,7 +1836,11 @@ def cmd_status(args: argparse.Namespace) -> int:
     state, doing = classify_session(events)
     running = state == SESSION_RUNNING
     dead = state == SESSION_DEAD
-    resume = resume_command(path.name, args.root) if dead else (end or {}).get("resume")
+    # `duet resume` refuses a session that never saved state.json, so status
+    # does not offer it: it says how to start the session again instead.
+    restart = restart_command(start, args.root) if dead and not _can_resume(path) else None
+    resume = (None if restart else resume_command(path.name, args.root)) if dead \
+        else (end or {}).get("resume")
 
     if args.json:
         print(json.dumps({
@@ -1805,6 +1850,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             "status": (end or {}).get("status") or (DEAD_LABEL if dead else None),
             "reason": (end or {}).get("reason") or ("%s %s" % (DEAD_LABEL, doing) if dead else None),
             "resume": resume,
+            "restart": restart,
             "rounds": (turns[-1].get("round") if turns else 0),
             "max_rounds": start.get("max_rounds"),
             "task": start.get("task"),
@@ -1842,7 +1888,12 @@ def cmd_status(args: argparse.Namespace) -> int:
         print("  " + ui.red(DEAD_LABEL) + " " + doing
               + ui.dim(" — last event %dm %02ds ago" % (age // 60, age % 60))
               + (ui.dim(" — " + note) if note else ""))
-        print("  " + ui.dim("continue with: ") + ui.bold(str(resume)))
+        if restart:
+            print("  " + ui.dim("it saved no state.json — it died before finishing a turn, "
+                                "so there is nothing to resume"))
+            print("  " + ui.dim("start it again with: ") + ui.bold(restart))
+        else:
+            print("  " + ui.dim("continue with: ") + ui.bold(str(resume)))
     else:
         status = (end or {}).get("status")
         mark = ui.green("finished") if status == STATUS_CONSENSUS else ui.yellow(str(status))
@@ -1885,6 +1936,88 @@ def cmd_status(args: argparse.Namespace) -> int:
         print()
         print(ui.dim("  follow it live: ") + ui.bold("duet report --transcript"))
     return 0 if running or (end or {}).get("status") == STATUS_CONSENSUS else 1
+
+
+# Indirect, like orchestrator.SLEEP, so a test can replace it without ever
+# sleeping for real; see tests/conftest.py's `_no_wait_polling_sleep`.
+WAIT_POLL = time.sleep
+WAIT_POLL_SECONDS = 3.0
+
+
+def cmd_wait(args: argparse.Namespace) -> int:
+    """Block until a session is no longer running, then print the same final
+    summary `duet status <id>` does.
+
+    "No longer running" is `classify_session`'s call, the same one `duet
+    status` makes from the event log — finished (a session_end was written)
+    or dead (its process is gone, or it has been silent longer than any turn
+    and gate allow). This never touches the session's process or reads
+    anything but its own event log, so an agent's message that happens to
+    contain the word "ERROR" is just a field in an event, never mistaken for
+    the session having ended. Polls every few seconds; never a busy loop.
+
+    Exit 0 for consensus, 1 for any other end (exhausted, blocked, error,
+    interrupted, dead), 2 for a timeout or no such session.
+    """
+    where = Path(args.root).resolve() / ".duet" / "sessions"
+    status_args = argparse.Namespace(session=args.session, root=args.root,
+                                     json=bool(getattr(args, "json", False)),
+                                     quiet=bool(getattr(args, "quiet", False)))
+    if not args.session and not _sessions(args.root):
+        print("no sessions yet in %s" % where)
+        return 2
+
+    deadline = time.time() + args.timeout * 60 if args.timeout else None
+    while True:
+        sessions = _sessions(args.root)
+        if args.session:
+            sessions = [p for p in sessions if p.name == args.session]
+        path = sessions[-1] if sessions else None
+        events = _read_events(path) if path else []
+        if events:
+            if classify_session(events)[0] != SESSION_RUNNING:
+                break
+        elif not (args.session and _still_starting(where, args.session)):
+            # Never started, or stopped before it wrote anything: status says
+            # which, with the end of the --detach log when there is one.
+            break
+        now = time.time()
+        if deadline is not None and now >= deadline:
+            print(ui.yellow("duet wait") + "  " + ui.dim(
+                "timed out after %s minutes, still running: %s"
+                % (args.timeout, path.name if path else args.session)))
+            return 2
+        WAIT_POLL(WAIT_POLL_SECONDS if deadline is None else max(0.0, min(WAIT_POLL_SECONDS, deadline - now)))
+
+    if path is not None:
+        status_args.session = path.name
+    code = cmd_status(status_args)
+    # Status says 0 for a running session; nothing that ended here is one.
+    return code if path is not None and events else 2
+
+
+# How long a --detach child may take to write its first event before `duet
+# wait` stops treating it as starting: a fresh interpreter on a loaded machine
+# can take well over 5 s to import duet, and a gate preflight runs first.
+WAIT_STARTUP_GRACE = 180
+
+
+def _still_starting(where: Path, session_id: str) -> bool:
+    """Whether a session with no events yet was touched recently enough to be
+    starting: its --detach log, or its directory, changed within the grace.
+
+    Without this, `duet wait <id>` run straight after `--detach` — what the
+    skill tells Claude Code to do — found no session directory and exited 2,
+    or found an empty event log, which `classify_session` calls dead.
+    """
+    newest = 0.0
+    for candidate in (where / (session_id + ".log"), where / session_id,
+                      where / session_id / "events.jsonl"):
+        try:
+            newest = max(newest, candidate.stat().st_mtime)
+        except OSError:
+            continue
+    return newest > 0 and time.time() - newest < WAIT_STARTUP_GRACE
 
 
 VERIFY_OK = 0        # signed state still present, gate still green
@@ -2181,7 +2314,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
             return refuse(
                 "session %s saved no state.json, so there is nothing to carry on from" % path.name,
                 ["it died before finishing a single turn — there is no argument to keep;",
-                 "start it again with:  duet run \"...\""],
+                 "start it again with:  " + restart_command(
+                     next((e for e in _read_events(path) if e.get("kind") == "session_start"), {}),
+                     root)],
                 session=path.name,
             )
     else:
@@ -2255,6 +2390,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
     # Never carried over: whether to trust a remembered pass is a choice about
     # this run, and a resume is usually over files nobody has touched since.
     cfg.fresh_gate = bool(getattr(args, "fresh_gate", False))
+    # This resume, not the original command: if it dies before saving, running
+    # it again carries on the same saved argument.
+    if getattr(args, "started_with", None):
+        cfg.started_with = [a for a in args.started_with if a != "--detach"]
     # Kept from the saved session; the flag can only turn it on.
     if getattr(args, "gate_every_turn", False):
         cfg.gate_every_turn = True
@@ -2984,6 +3123,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_status.add_argument("session", nargs="?", help="session id (default: the newest)")
     p_status.set_defaults(func=cmd_status)
 
+    p_wait = sub.add_parser(
+        "wait",
+        help="block until a session is no longer running, then print its status",
+    )
+    common(p_wait)
+    p_wait.add_argument("session", nargs="?", help="session id (default: the newest)")
+    p_wait.add_argument("--timeout", type=float, metavar="MINUTES",
+                        help="give up and exit 2 after this long (default: no limit)")
+    p_wait.set_defaults(func=cmd_wait)
+
     p_resume = sub.add_parser(
         "resume",
         help="carry on an interrupted session from where it stopped, keeping the argument",
@@ -3173,9 +3322,9 @@ def cmd_detach(argv: List[str], args: argparse.Namespace) -> int:
         log_fh.close()
 
     here = str(Path.cwd().resolve())
-    status_cmd = "duet status %s" % session_id
-    if here != root:
-        status_cmd += " -C %s" % quote_for_shell(root, windows=windows)
+    root_suffix = " -C %s" % quote_for_shell(root, windows=windows) if here != root else ""
+    status_cmd = "duet status %s" % session_id + root_suffix
+    wait_cmd = "duet wait %s" % session_id + root_suffix
     log_arg = quote_for_shell(str(log_path), windows=windows)
     # Windows has no tail; PowerShell's Get-Content -Wait is the same thing.
     follow = ("Get-Content -Wait %s" if windows else "tail -f %s") % log_arg
@@ -3184,6 +3333,9 @@ def cmd_detach(argv: List[str], args: argparse.Namespace) -> int:
     print("  log:     " + str(log_path))
     print("  " + ui.dim("follow it:   ") + ui.bold(follow))
     print("  " + ui.dim("check on it: ") + ui.bold(status_cmd))
+    # Blocks on the event log, not the process — a "tail -f | grep ERROR"
+    # would trip on an agent's own message that happens to say that.
+    print("  " + ui.dim("wait on it:  ") + ui.bold(wait_cmd))
     return 0
 
 
@@ -3201,6 +3353,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     parser = build_parser()
     args = parser.parse_args(argv)
+    # Recorded with the session, so one that dies before it saves anything can
+    # be started again exactly as it was (see restart_command).
+    args.started_with = raw_argv
     if not getattr(args, "command", None):
         parser.print_help()
         print("\n" + ui.dim("first time?  ") + ui.bold("duet setup")

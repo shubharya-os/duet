@@ -171,6 +171,10 @@ class Config:
     # remembers a pass for these files and this command. Set per invocation —
     # `duet resume` takes it from its own flags, not from the saved session.
     fresh_gate: bool = False
+    # The arguments `duet` was started with for this session, without
+    # --detach. A session that dies before its first save leaves nothing to
+    # resume, and `duet status` offers this to start it again instead.
+    started_with: List[str] = field(default_factory=list)
 
     @property
     def agent_names(self) -> List[str]:

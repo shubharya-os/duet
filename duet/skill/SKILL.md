@@ -26,7 +26,9 @@ shell that started it — your own tool shell, a terminal someone closes — can
 before they finish. Without `--detach`, that kills the session with it, silently.
 `--detach` starts it as its own process and returns at once with a session id and a log
 path; poll progress with `{{DUET}} status` (an id, or none for the newest) and `tail -f`
-the log if you want to watch it live.
+the log if you want to watch it live. To block until it is done instead, use
+`{{DUET}} wait` — it watches the event log rather than grepping the log for "ERROR",
+which an agent's own message can contain without the session having ended.
 
 Both agents take turns in the workspace until they agree. It never ends on one agent's
 say-so: both must vote DONE on the same workspace state, with no blocking objection open
