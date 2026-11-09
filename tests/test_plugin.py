@@ -48,3 +48,15 @@ def test_skill_install_leaves_claude_code_to_the_plugin_when_it_is_installed(tmp
     assert not (home / ".claude" / "skills" / "duet" / "SKILL.md").exists()
     assert (home / ".codex" / "skills" / "duet" / "SKILL.md").exists()
     assert "provided by the duet plugin" in capsys.readouterr().out
+
+
+def test_the_plugin_folder_carries_what_the_directory_requires():
+    """Anthropic's plugin directory lists only the plugin folder, and blocks one
+    without a README of at least 40 words outside code blocks, or without a licence."""
+    import re
+    rendered = plugin_files.render()
+    readme = rendered["plugin/README.md"]
+    prose = re.sub(r"```.*?```", "", readme, flags=re.S)
+    assert len(prose.split()) >= 40
+    root = Path(plugin_files.__file__).resolve().parent.parent
+    assert rendered["plugin/LICENSE"] == (root / "LICENSE").read_text(encoding="utf-8")
