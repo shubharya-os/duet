@@ -1018,6 +1018,10 @@ pipe.
 Four of those were found by pointing duet's own ChatGPT side at duet's core and asking
 for correctness bugs. All four were real. That's the premise working on its author.
 
+[docs/FIELD-NOTES.md](docs/FIELD-NOTES.md) is what 422 real sessions' logs show. In
+about 1 in 10 sessions where a rule was checked, both models had agreed the work was done
+on tests that would have passed without the change, and the harness refused it.
+
 974 tests, no network or credentials needed. CI on Python 3.9, 3.11 and 3.13, on Ubuntu, macOS and Windows.
 
 ```bash
