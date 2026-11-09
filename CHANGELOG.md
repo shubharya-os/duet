@@ -24,7 +24,32 @@
 - Every gate run's whole output is saved as
   `.duet/sessions/<id>/gate-<digest8>.log`; the path is shown to the agents
   when the output was trimmed, and the report links it.
-
+- ChatGPT no longer drops out of a session when `~/.codex/config.toml` names a
+  model the ChatGPT login does not serve. Every codex turn failed with "The
+  'gpt-5.5' model is not supported when using Codex with a ChatGPT account", the
+  session ended "chatgpt failed twice", and duet carried on as Claude alone. Now
+  the turn is retried once with `--model` set to the best model the login lists
+  in Codex's `models_cache.json` (`CODEX_HOME` respected; hidden models and the
+  refused one skipped), and that model is kept for the rest of the session and
+  across `duet resume`. It is said once — a `backend_model_fallback` event, one
+  line on screen and in the report: "Codex: your config asks for gpt-5.5, which
+  this ChatGPT login does not serve; using gpt-6-luna". With no usable cache the
+  error names the model and the fix (`model` in config.toml, or
+  `--pair claude+codex:<model>`), and it is never retried as a blip.
+- A ChatGPT turn that finished is no longer called a sign-in failure because of
+  what the agent wrote. The codex adapter searched stdout and stderr for "not
+  logged in" before it looked at the exit status, and that output holds the
+  agent's answer and codex's echo of the prompt — so a reviewer reviewing
+  login code, who wrote the phrase in a successful reply, ended a session with
+  "chatgpt failed twice: codex reported a sign-in problem, but `codex login
+  status` says Logged in". Now a turn that exits 0 with an answer is a success
+  whatever it says; on a failed turn the sign-in check reads only codex's
+  stderr, and the usage-limit and model checks only its ERROR lines, both with
+  the echoed prompt cut out. The Claude adapter no longer reads a sign-in
+  problem into an answer the CLI did not flag as an error.
+- `duet doctor` and `duet run`'s readiness check warn up front when Codex's
+  configured model is not among the login's listed models — read from the two
+  local files, no model call.
 - Build output no longer moves the state id. The workspace digest skipped
   `build/` but not SwiftPM's `.build/`, so every `swift test` gate run rewrote
   hashed files: two DONE votes on unchanged source never matched, and a

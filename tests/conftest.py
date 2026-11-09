@@ -75,3 +75,14 @@ def _own_state_dir(tmp_path_factory, monkeypatch):
     would leave that memory behind for the next real `duet doctor`.
     """
     monkeypatch.setenv("DUET_STATE_DIR", str(tmp_path_factory.mktemp("duet-state")))
+
+
+@pytest.fixture(autouse=True)
+def _own_codex_home(tmp_path_factory, monkeypatch):
+    """No test reads the developer's real ~/.codex.
+
+    duet reads Codex's configured model and its models cache from there, and a
+    machine whose config names a model its login does not serve would otherwise
+    change what every Codex probe and turn in the suite reports.
+    """
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path_factory.mktemp("codex-home")))

@@ -347,6 +347,11 @@ class Adapter:
         true of the one signed in now.
         """
 
+    def notices(self) -> List[str]:
+        """Lines worth a place in the report about how this backend was run,
+        such as a model swapped for one the account actually serves."""
+        return []
+
     def describe(self) -> str:
         return "%s (%s%s)" % (self.display, self.backend, ", " + self.model if self.model else "")
 
