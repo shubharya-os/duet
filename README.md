@@ -852,6 +852,19 @@ did run and which state it was for. A deferred gate is never a pass, so the pair
 still cannot finish without a green run on the exact files they signed.
 `--gate-every-turn` runs it after every turn as before, and is saved with the session.
 
+An agent can also ask for it without voting: a CONTINUE envelope with
+`"run_gate": true` has the harness run the gate on the state that turn left and show
+the result to the next agent, and the session goes on — "gate run on request" in the
+terminal and the report. It is how an agent that cannot build (an Xcode project under
+`acceptEdits`) gets a compile check without voting BLOCKED, which stops the session.
+One run per turn; a state whose gate already ran is answered from that run.
+
+When the gate's output is too long to show whole, the lines naming what failed —
+pytest, unittest, XCTest/xcodebuild, swiftc, jest/vitest, go, cargo, and a Python
+traceback's last line — are pulled out of all of it and shown first, then the head
+and tail. Every run's whole output is saved as `.duet/sessions/<id>/gate-<state>.log`,
+and its path is shown whenever the output was trimmed.
+
 A gate that passes is remembered in `.duet/gate-cache.json`, keyed by the digest of
 the workspace and the exact gate command, with when it ran, how long it took and its
 output. A session — new or resumed — that opens on the same files with the same

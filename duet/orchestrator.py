@@ -276,6 +276,9 @@ class TurnRecord:
     digest: str
     patch_log: List[str] = field(default_factory=list)
     gate: Optional[GateResult] = None
+    # The turn said CONTINUE and asked for the gate ("run_gate"), so the gate
+    # above is a run (or the cached one), not a deferral.
+    gate_requested: bool = False
     ingest: str = ""
     error: str = ""
     meta: Dict[str, Any] = field(default_factory=dict)
@@ -461,6 +464,8 @@ class Orchestrator:
         if self.workspace.gate:
             self.emit("gate_start", command=self.workspace.gate, digest=digest)
         result = self.workspace.run_gate()
+        if self.workspace.gate:
+            self._save_gate_log(digest, result)
         # A pass that followed a failure on the same files is not one to carry
         # into the next session's opening check as if it were settled.
         if remember:
@@ -473,6 +478,37 @@ class Orchestrator:
                       timed_out=result.timed_out, timeout=result.timeout)
             self._check_gate_is_read_only(digest)
         return result
+
+    def _save_gate_log(self, digest: str, result: GateResult) -> None:
+        """Keep the whole output of a run where the agents can open it.
+
+        What they are shown is trimmed to fit a prompt; this is the rest of it,
+        one file per state (a re-run on the same files replaces it).
+        """
+        path = self.session_dir / ("gate-%s.log" % digest[:8])
+        try:
+            self.session_dir.mkdir(parents=True, exist_ok=True)
+            path.write_text("$ %s\n%s\n%s" % (result.command, result.headline(), result.output),
+                            encoding="utf-8")
+        except OSError:
+            return
+        result.log = str(path)
+
+    def _read_gate_log(self, path: str) -> Optional[str]:
+        """A saved gate log of this session, for an agent that reads through
+        `reads`: the workspace refuses .duet/, but the trimmed gate output
+        points here, so this one file in it has to be readable."""
+        name = Path(path).name
+        if not re.fullmatch(r"gate-[0-9a-f]{8}\.log", name):
+            return None
+        target = self.session_dir / name
+        asked = Path(path)
+        if (asked if asked.is_absolute() else self.workspace.root / asked) != target:
+            return None
+        try:
+            return target.read_text(encoding="utf-8", errors="replace")[:20000]
+        except OSError:
+            return None
 
     def deferred_gate(self, digest: str, why: str) -> GateResult:
         """The gate for `digest`, deliberately not run, carrying the last run that was."""
@@ -504,6 +540,17 @@ class Orchestrator:
         if digest in self._gate_cache:
             return self._gate_cache[digest]
         return self.deferred_gate(digest, "the last turn said CONTINUE")
+
+    def requested_gate(self, digest: str) -> GateResult:
+        """The gate on the state a CONTINUE turn left, because it set "run_gate".
+
+        An agent that cannot build asking for the only compile check it has.
+        On 0.15.0, 24 of 67 BLOCKED endings were this request, and BLOCKED
+        stopped the session. It runs as a DONE's does — at most once per turn,
+        since a turn asks once, and a state already run is answered from the
+        cache (the one flaky re-run aside) — and counts as no vote.
+        """
+        return self.gate_for(digest, recheck=True)
 
     def round_gate(self, digest: str) -> GateResult:
         """The gate at the start of a round, after the opening one.
@@ -580,7 +627,7 @@ class Orchestrator:
         gate = self.shown_gate(digest)
         files: Dict[str, str] = {}
         for path in self.pending_reads.pop(agent, [])[:12]:
-            files[path] = self.workspace.read(path)
+            files[path] = self._read_gate_log(path) or self.workspace.read(path)
         return prompts.turn_prompt(
             task=self.config.task,
             acceptance=self.config.acceptance,
@@ -787,11 +834,13 @@ class Orchestrator:
             self.pending_refused[self.state.peer_of(agent)] = refused
 
         digest_after = self.workspace.digest()
-        gate = self.gate_after_turn(digest_after, env.verdict)
+        requested = env.run_gate and env.verdict == "CONTINUE"
+        gate = (self.requested_gate(digest_after) if requested
+                else self.gate_after_turn(digest_after, env.verdict))
 
         record = TurnRecord(
             round=round_no, agent=agent, role=role, envelope=env, digest=digest_after,
-            patch_log=patch_log, gate=gate, meta=reply.meta,
+            patch_log=patch_log, gate=gate, meta=reply.meta, gate_requested=requested,
         )
         if ingest:
             report = self.state.ingest(env, digest_after)
@@ -812,10 +861,11 @@ class Orchestrator:
                 record.ingest or "no issue changes",
                 " | %d file(s) written" % len(patch_log) if patch_log else "",
                 " | %d call(s) refused" % len(refused) if refused else "",
-                " | gate %s" % ("deferred (CONTINUE)" if gate.deferred
-                                else "PASS on a re-run, possibly flaky" if gate.ok and gate.flaky
-                                else "PASS" if gate.ok else "TIMED OUT" if gate.timed_out
-                                else "FAIL")
+                " | gate %s%s" % ("run on request: " if requested and not gate.deferred else "",
+                                  "deferred (CONTINUE)" if gate.deferred
+                                  else "PASS on a re-run, possibly flaky" if gate.ok and gate.flaky
+                                  else "PASS" if gate.ok else "TIMED OUT" if gate.timed_out
+                                  else "FAIL")
                 if self.workspace.gate else "",
             )
         )
@@ -839,6 +889,7 @@ class Orchestrator:
             gate_ok=None if gate.deferred else gate.ok,
             gate_timed_out=gate.timed_out,
             gate_deferred=bool(gate.deferred),
+            gate_requested=requested,
             message=env.message,
             notes=env.notes,
             refused=refused,
@@ -1379,8 +1430,9 @@ class Orchestrator:
             if record.gate and record.gate.deferred:
                 lines.append("**Gate:** deferred (CONTINUE)")
             elif record.gate and not record.gate.skipped:
-                lines.append("**Gate:** %s" % (record.gate.flaky if record.gate.ok and record.gate.flaky
-                                               else "passed" if record.gate.ok else "FAILED"))
+                lines.append("**Gate:** %s%s" % (record.gate.flaky if record.gate.ok and record.gate.flaky
+                                                 else "passed" if record.gate.ok else "FAILED",
+                                                 " (gate run on request)" if record.gate_requested else ""))
             lines.append("**Workspace:** `%s`" % record.digest[:8])
             lines.append("")
         return "\n".join(lines)
@@ -1409,6 +1461,8 @@ class Orchestrator:
                          % (name, self.adapters[name].describe(), verdict, mark))
         if result.gate and not result.gate.skipped:
             lines += ["", "## Acceptance gate", "", "```", result.gate.render(1500), "```"]
+            if result.gate.log:
+                lines += ["", "Full output: [%s](%s)" % (Path(result.gate.log).name, result.gate.log)]
         open_issues = self.state.open_issues()
         lines += ["", "## Issues", ""]
         if not self.state.issues:

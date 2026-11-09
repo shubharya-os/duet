@@ -32,6 +32,12 @@ How this actually works:
 - {edit_channel}
 - The harness runs the acceptance gate itself and shows you the real output. It
   does not take either of your words for it.
+- If you cannot build or run the tests yourself, ask the harness to: vote
+  CONTINUE with "run_gate": true and it runs the gate on your changes and shows
+  you the result next turn. That is how you get a compile or test check you
+  cannot run. BLOCKED is only for what neither of you can fix — missing
+  credentials, a broken machine, a decision only the user can make — because
+  BLOCKED stops the session.
 - The session ends when you BOTH vote DONE on the same workspace state with no
   blocking issue open and the gate green. Your peer's DONE cannot end it without
   yours, and yours cannot end it without theirs.

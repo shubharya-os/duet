@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Agents can ask for the gate without ending the session: a CONTINUE with
+  `"run_gate": true` (also `"gate"` or `"request_gate"`, and "yes"/"true") runs
+  the gate on the state that turn left, shows the result to the next agent, and
+  counts as no vote. Measured on 242 sessions on 0.15.0 (2026-10-12 to
+  2026-11-07): 67 (28%) ended BLOCKED, and in 24 of them the BLOCKED was really
+  a request for a gate run — agents who could not build (iOS/Xcode, where
+  `acceptEdits` allows only the gate's own executables) voted BLOCKED to get a
+  compile check, and BLOCKED stops the session. One requested run per turn; a
+  state whose gate already ran is answered from that run (the flaky re-run
+  aside). `turn_done` records `gate_requested`; the terminal and the report say
+  "gate run on request". Every agent's instructions now say so, and narrow
+  BLOCKED to what neither agent can fix.
+- A gate failure is never trimmed away. 61 turns on 0.15.0 complained the
+  output was cut before the failure names: rendering kept the first and last
+  halves and dropped the middle, where xcodebuild, XCTest and pytest name the
+  failing tests. Before trimming, the failure lines of pytest, unittest,
+  XCTest/xcodebuild, swiftc, jest/vitest, go, cargo and Python tracebacks are
+  pulled from the whole output and shown first (deduplicated, in order, at most
+  80 lines / 4 KB, with how many more there were).
+- Every gate run's whole output is saved as
+  `.duet/sessions/<id>/gate-<digest8>.log`; the path is shown to the agents
+  when the output was trimmed, and the report links it.
+
 - Build output no longer moves the state id. The workspace digest skipped
   `build/` but not SwiftPM's `.build/`, so every `swift test` gate run rewrote
   hashed files: two DONE votes on unchanged source never matched, and a
