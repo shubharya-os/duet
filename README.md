@@ -29,6 +29,31 @@
 > *duet is a developer tool: it runs in a terminal and drives Claude Code and ChatGPT
 > through your existing subscriptions.*
 
+**Try it:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shubharya-os/duet/main/install.sh | sh
+duet demo        # a whole session with scripted agents: no sign-in, about a minute
+```
+
+The installer also offers to install and sign in to Claude Code and Codex (your plans,
+no API keys). Other ways to install, including as a Claude Code plugin, are [below](#install).
+
+**Already using `/codex:review`?** [OpenAI's Codex plugin for Claude Code](https://github.com/openai/codex-plugin-cc)
+gives you a second opinion to read. duet closes the loop:
+
+| | `/codex:review` | duet |
+|---|---|---|
+| You get | a review | a change both models signed off on |
+| Who acts on the findings | you, or Claude when you ask | the two models, until neither has an open issue |
+| Your tests | run if someone runs them | run by the harness on the exact files being signed |
+| "Done" means | the review finished | both approved identical bytes, the gate passed, and the workflow's rule held — `fix`: the new test fails on the original code |
+| Edits your code | never | yes, in your workspace (`duet review` is the read-only mode) |
+
+Use `/codex:review` for a quick look. Use duet when you want the bug actually fixed and
+proven fixed. If the Codex plugin is set up, Codex is already installed and signed in,
+so `duet fix "..."` pairs Claude and Codex with nothing more to install.
+
 ```bash
 duet build "an expense tracker web app"      # from nothing: criteria, then tests, then code
 duet fix "export drops rows with commas"     # its tests must fail on the original code

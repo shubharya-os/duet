@@ -56,7 +56,14 @@ td.x { color: var(--bad); font-weight: 600; white-space: nowrap; }
 .stat span { color: var(--muted); font-size: 13.5px; }
 .honest { border-left: 3px solid var(--accent-2); padding: 4px 0 4px 16px; color: var(--muted); }
 footer { margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
-@media (max-width: 560px) { th:nth-child(3), td:nth-child(3) { display: none; } }
+/* On a phone, only a table whose third column is detail drops it; in the comparisons
+   the third column is one side of the comparison. */
+@media (max-width: 560px) {
+  table.detail th:nth-child(3), table.detail td:nth-child(3) { display: none; }
+  table { font-size: 13.5px; }
+  th, td { padding: 8px 6px; }
+  td.r, td.x { white-space: normal; }
+}
 </style>
 </head>
 <body>
@@ -72,6 +79,7 @@ footer { margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--line);
     <pre class="term" id="cmd">curl -fsSL https://raw.githubusercontent.com/shubharya-os/duet/main/install.sh | sh</pre>
     <button class="copy" type="button" data-copy="cmd">Copy</button>
   </div>
+  <p style="color:var(--muted);font-size:14px;margin:0 0 8px">Then <code>duet demo</code>: a whole session with scripted agents, no sign-in, about a minute.</p>
   <p style="color:var(--muted);font-size:14px;margin:0 0 8px">Or inside Claude Code, as a plugin:
   <code>/plugin marketplace add shubharya-os/duet</code> then <code>/plugin install duet@duet</code>.</p>
   <p style="color:var(--muted);font-size:14px;margin:0">Uses the Claude and ChatGPT plans you already have — no API keys.
@@ -101,7 +109,7 @@ footer { margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--line);
   <div class="stat"><b>10</b><span>test files, on Python 3.9 and 3.12</span></div>
 </div>
 <p style="margin-top:20px">Then attacked by hand — over HTTP, and in a real browser — not through its own tests:</p>
-<table>
+<table class="detail">
   <tr><th>attack</th><th>result</th><th>detail</th></tr>
   <tr><td>SQL injection in a category</td><td class="r">stored as text</td><td><code>x'); DROP TABLE expenses;--</code> — table intact</td></tr>
   <tr><td>stored XSS, loaded in a browser</td><td class="r">rendered as text</td><td>0 injected elements; no external resources loaded</td></tr>
@@ -138,6 +146,18 @@ lays the finished tests over it, and runs them there.</p>
   <tr><td>time</td><td>~1 min</td><td>6 min</td></tr>
 </table>
 <p>Questions, exploration and one-line edits stay direct. Always-on cost: about <b>545 tokens</b> of instructions per session.</p>
+
+<h2>Already using /codex:review?</h2>
+<p><a href="https://github.com/openai/codex-plugin-cc">OpenAI's Codex plugin for Claude Code</a> gives you a second opinion to read. duet closes the loop.</p>
+<table>
+  <tr><th></th><th>/codex:review</th><th>duet</th></tr>
+  <tr><td>you get</td><td>a review</td><td class="r">a change both models signed off on</td></tr>
+  <tr><td>findings acted on by</td><td>you, or Claude when asked</td><td class="r">the two models, until none is open</td></tr>
+  <tr><td>your tests</td><td>run if someone runs them</td><td class="r">run by the harness on the signed files</td></tr>
+  <tr><td>"done" means</td><td>the review finished</td><td class="r">same bytes approved, gate green, rule held</td></tr>
+  <tr><td>edits your code</td><td>never</td><td>yes (<code>duet review</code> is read-only)</td></tr>
+</table>
+<p>If the Codex plugin is set up, Codex is already installed and signed in, so <code>duet fix "…"</code> pairs Claude and Codex with nothing more to install.</p>
 
 <h2>Coming from ECC?</h2>
 <p>Both install with one command. The difference is what you carry afterwards, and what gets checked.</p>
