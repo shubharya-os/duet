@@ -54,8 +54,9 @@ The gate is still 47% of session time on 0.15, because these projects' gates are
 (median run 9 minutes, 90th percentile 69 minutes). The largest remaining cost is the
 opening gate before round one: 257 runs, 131 hours. In 47 of those runs, the same files
 had already been checked by the same command within the previous 24 hours. duet already
-reuses a remembered pass, and it is being taught to reuse a remembered failure for that
-opening look as well, never as evidence for a rule or a sign-off.
+reused a remembered pass. Since 0.16 it reuses a remembered failure for that opening
+look too. A remembered result is never used as evidence for a rule or a sign-off: those
+always get a real run.
 
 ## Deferring the gate taught the agents a bad habit
 
