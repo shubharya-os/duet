@@ -87,6 +87,9 @@ class Envelope:
     parse_ok: bool = True
     notes: List[str] = field(default_factory=list)
     meta: Dict[str, Any] = field(default_factory=dict)
+    # Set on a CONTINUE that asks the harness to run the gate on the state this
+    # turn leaves, without voting. See Orchestrator.gate_after_turn.
+    run_gate: bool = False
 
     @property
     def blockers(self) -> List[Issue]:
@@ -106,6 +109,7 @@ class Envelope:
             parse_ok=self.parse_ok,
             notes=list(self.notes),
             meta=dict(self.meta),
+            run_gate=self.run_gate,
         )
 
     @classmethod
@@ -123,6 +127,7 @@ class Envelope:
             verdict=str(data.get("verdict") or "CONTINUE"),
             summary=str(data.get("summary") or ""),
             parse_ok=bool(data.get("parse_ok", True)),
+            run_gate=_truthy(data.get("run_gate")),
         )
         for field_name, caster in (("round", int), ("confidence", float)):
             try:
@@ -260,6 +265,21 @@ def _coerce_str_list(value: Any) -> List[str]:
     return [slugify(v) for v in value if str(v).strip()]
 
 
+def _truthy(value: Any) -> bool:
+    """A yes from a model, however it spelled it: true, "yes", "True", 1.
+
+    Anything else — false, "no", a string that is not a yes, a nested object —
+    is not a request. Asking for the gate costs a run, so only a clear yes does.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "y", "1", "on", "please")
+    return False
+
+
 def parse_envelope(text: str, agent: str = "", round_no: int = 0) -> Envelope:
     """Read an agent's reply into an Envelope, never raising.
 
@@ -307,6 +327,8 @@ def parse_envelope(text: str, agent: str = "", round_no: int = 0) -> Envelope:
     env.resolves = _coerce_str_list(data.get("resolves") or data.get("resolved"))
     env.summary = str(data.get("summary") or "").strip()
 
+    env.run_gate = any(_truthy(data.get(key)) for key in ("run_gate", "request_gate", "gate"))
+
     ruling = data.get("ruling")
     if ruling is not None:
         env.meta["ruling"] = ruling
@@ -350,13 +372,21 @@ it is for your peer to read; the envelope is what the harness acts on.
   "resolves": ["id-of-a-peer-issue-you-have-now-fixed"],
   "patches": [],
   "summary": "one line for the changelog",
-  "confidence": 0.0
+  "confidence": 0.0,
+  "run_gate": false
 }
 ```
 
 Rules that the harness enforces:
 - `DONE` means "I have checked the current state of the workspace and I would
   ship it." Voting DONE while listing a blocker or major issue is rejected.
+- Set `"run_gate": true` with CONTINUE to have the harness run the gate on the
+  state your turn leaves and show you both the result next turn. It is not a
+  vote and the session goes on. Once per turn; a state already gated is answered
+  from that run.
+- `BLOCKED` stops the session. Use it only for what neither of you can fix: a
+  missing credential, a broken machine, a decision only the user can make.
+  Never to get the gate run — that is what `run_gate` is for.
 - The session ends only when BOTH of you vote DONE on the SAME workspace state
   with no open blocker or major issues and the acceptance gate passing. One
   side alone can never end it.

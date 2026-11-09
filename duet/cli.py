@@ -126,7 +126,9 @@ def make_reporter(agents: List[str], verbose: bool = True, as_json: bool = False
             say("  %s %s  %s" % (
                 ui.agent_tag(event["agent"], agents),
                 ui.verdict_tag(event.get("verdict", "")),
-                ui.dim("state %s%s" % (str(event.get("digest", ""))[:8],
+                ui.dim("state %s%s%s" % (str(event.get("digest", ""))[:8],
+                                       ", gate run on request" if event.get("gate_requested")
+                                       and not event.get("gate_deferred") else "",
                                        ", gate deferred (CONTINUE)" if event.get("gate_deferred")
                                        else "" if event.get("gate_ok", True)
                                        else ", gate TIMED OUT" if event.get("gate_timed_out")

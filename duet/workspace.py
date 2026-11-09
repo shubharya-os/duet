@@ -80,6 +80,93 @@ def failing_tests(output: str, limit: int = 10) -> List[str]:
     return names[:limit]
 
 
+# Lines that name a failure, for every runner a gate is likely to be. Matched
+# against the WHOLE output before it is trimmed: xcodebuild, XCTest and pytest
+# print the failing names in the middle of a long log, exactly where the trim
+# used to cut. Measured on 0.15.0: 61 turns said the names had been cut off.
+_FAILURE_PATTERNS = [re.compile(p) for p in (
+    r"^(?:FAILED|ERROR) ",                       # pytest's short summary
+    r"^(?:FAIL|ERROR): ",                        # unittest
+    r"^\S.*?:\d+(?::\d+)?: (?:fatal )?error: ",  # clang, swiftc, xcodebuild with file:line
+    r"^(?:fatal )?error: ",                      # swiftc / swift build without a location
+    r"^Test Case '.*' failed",                   # XCTest
+    r"^\*\* [A-Z ]*FAILED \*\*",                 # ** TEST FAILED **, ** BUILD FAILED **
+    r"^(?:FAIL)\s",                              # jest/vitest file, go package
+    r"^[✕✗×] ",                                  # jest/vitest test
+    r"^● ",                                      # jest test header
+    r"^--- FAIL",                                # go
+    r"^test .* \.\.\. FAILED",                   # cargo
+    r"panicked at ",                             # cargo / rust
+)]
+_PYTEST_DETAIL = re.compile(r"^E\s")
+# pytest's `E` lines are the assertion; the first two say what was compared.
+PYTEST_DETAIL_LINES = 2
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+FAILURE_LINES = 80
+FAILURE_CHARS = 4000
+
+
+def failure_lines(output: str, max_lines: int = FAILURE_LINES,
+                  max_chars: int = FAILURE_CHARS) -> Tuple[List[str], int]:
+    """The lines of a gate's output that name what failed, and how many more
+    there were than fit.
+
+    In order, each once. Platform-neutral on purpose: a gate is whatever the
+    project runs, so this knows the common runners' shapes rather than any one.
+    """
+    found: List[str] = []
+    seen = set()
+
+    def add(line: str) -> None:
+        if line and line not in seen:
+            seen.add(line)
+            found.append(line)
+
+    lines = _ANSI.sub("", output or "").splitlines()
+    detail = 0
+    in_failing_block = False
+    in_traceback = False
+    for raw in lines:
+        line = raw.rstrip()
+        bare = line.strip()
+        if in_failing_block:
+            # xcodebuild's "Failing tests:" lists one test per indented line.
+            if bare and raw[:1] in (" ", "\t"):
+                add(bare)
+                continue
+            in_failing_block = False
+        if in_traceback:
+            # A traceback ends on its first unindented line: the exception.
+            if bare and raw[:1] not in (" ", "\t"):
+                in_traceback = False
+                if not bare.startswith(("During handling", "The above exception")):
+                    add(bare)
+            continue
+        if bare.startswith("Traceback (most recent call last)"):
+            in_traceback = True
+            continue
+        if bare == "Failing tests:":
+            in_failing_block = True
+            continue
+        if _PYTEST_DETAIL.match(line):
+            detail += 1
+            if detail <= PYTEST_DETAIL_LINES:
+                add(line)
+            continue
+        detail = 0
+        if any(p.search(bare) for p in _FAILURE_PATTERNS):
+            add(bare)
+
+    shown: List[str] = []
+    size = 0
+    for line in found:
+        if len(shown) >= max_lines or size + len(line) + 1 > max_chars:
+            break
+        shown.append(line)
+        size += len(line) + 1
+    return shown, len(found) - len(shown)
+
+
 def _fair_shares(needs: Sequence[int], room: int) -> List[int]:
     """Split `room` so nobody gets more than they need and the rest share equally.
 
@@ -129,6 +216,9 @@ class GateResult:
     deferred: str = ""
     last_run: Optional["GateResult"] = None
     last_digest: str = ""
+    # Where the session saved this run's whole output, when it did. Named in
+    # what the agents see whenever the output had to be trimmed.
+    log: str = ""
 
     @classmethod
     def deferral(cls, command: str, why: str, last_run: Optional["GateResult"] = None,
@@ -162,8 +252,8 @@ class GateResult:
     def problem(self) -> str:
         """Why this gate does not count as green, in the agents' words."""
         if self.deferred:
-            return ("the gate has not run on this state (%s); it runs when someone votes DONE"
-                    % self.deferred)
+            return ("the gate has not run on this state (%s); it runs when someone votes DONE, "
+                    "or says CONTINUE with \"run_gate\": true" % self.deferred)
         if self.timed_out:
             return (self.timeout_note() + ", but it does not count as green until "
                     "it finishes (the limit is set with --gate-timeout MINUTES)")
@@ -176,16 +266,30 @@ class GateResult:
             text = ("$ %s\nNOT RUN — the gate was not run on this state because %s. It runs "
                     "on the state a turn leaves when that turn votes DONE (or BLOCKED), and "
                     "always before a sign-off is counted. You can run targeted tests "
-                    "yourself within your turn." % (self.command, self.deferred))
+                    "yourself within your turn, or say CONTINUE with \"run_gate\": true to "
+                    "have the harness run the gate on your changes and show you the result "
+                    "next turn." % (self.command, self.deferred))
             if self.last_run is None:
                 return text + "\n\nThe gate has not run yet in this session."
             return "%s\n\nThe most recent gate that did run was on state %s:\n%s" % (
                 text, self.last_digest[:8], self.last_run.render(limit))
         head = self.headline()
         out = self.output.strip()
-        if len(out) > limit:
-            out = out[: limit // 2] + "\n...[trimmed]...\n" + out[-limit // 2 :]
-        return "$ %s\n%s\n%s" % (self.command, head, out)
+        if len(out) <= limit:
+            return "$ %s\n%s\n%s" % (self.command, head, out)
+        # Too long to show whole. What failed is pulled out of all of it first,
+        # because the middle that the trim drops is where runners name it.
+        parts = ["$ %s" % self.command, head]
+        if self.log:
+            parts.append("The output was trimmed; the whole of it is in %s" % self.log)
+        failures, more = ([], 0) if self.ok else failure_lines(out)
+        if failures:
+            parts.append("Failures, from the whole output:\n%s%s" % (
+                "\n".join(failures),
+                "\n...and %d more" % more if more else ""))
+            parts.append("Head and tail of the output:")
+        parts.append(out[: limit // 2] + "\n...[trimmed]...\n" + out[-limit // 2:])
+        return "\n".join(parts)
 
 
 class Workspace:
