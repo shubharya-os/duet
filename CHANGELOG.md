@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.17.0
 
 - A gate that writes into the workspace no longer keeps two agents from ever
   agreeing. Measured on 431 sessions: in 94 (22%) the gate changed the

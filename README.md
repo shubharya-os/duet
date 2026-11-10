@@ -1036,7 +1036,7 @@ for correctness bugs. All four were real. That's the premise working on its auth
 about 1 in 10 sessions where a rule was checked, both models had agreed the work was done
 on tests that would have passed without the change, and the harness refused it.
 
-1066 tests, no network or credentials needed. CI on Python 3.9, 3.11 and 3.13, on Ubuntu, macOS and Windows.
+1075 tests, no network or credentials needed. CI on Python 3.9, 3.11 and 3.13, on Ubuntu, macOS and Windows.
 
 ```bash
 pytest -q
