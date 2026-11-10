@@ -137,6 +137,11 @@ def _plugin_json() -> str:
         "repository": REPO,
         "license": "MIT",
         "keywords": KEYWORDS,
+        # The links Anthropic's plugin directory shows on the listing.
+        "documentationUrl": REPO + "#readme",
+        "supportUrl": REPO + "/issues",
+        "privacyPolicyUrl": REPO + "/blob/main/docs/PRIVACY.md",
+        "termsOfServiceUrl": REPO + "/blob/main/LICENSE",
     }, indent=2) + "\n"
 
 
