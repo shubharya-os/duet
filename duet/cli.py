@@ -213,8 +213,21 @@ def make_reporter(agents: List[str], verbose: bool = True, as_json: bool = False
             say("  " + ui.yellow("✗ both signed off, but the `%s` rule is not met" % event.get("workflow")))
             say("    " + ui.dim(ui.wrap(str(event.get("reason") or "")).lstrip()))
             say("    " + ui.dim("sign-offs cleared; both agents have been told why"))
+        elif kind == "gate_outputs":
+            paths = list(event.get("paths") or [])
+            count = int(event.get("count") or len(paths))
+            say("     " + ui.dim("the gate writes %s; left out of the signed state: %s%s"
+                                 % ("1 path" if count == 1 else "%d paths" % count, ", ".join(paths),
+                                    " and %d more" % (count - len(paths)) if count > len(paths) else "")))
+        elif kind == "gate_outputs_returned":
+            say("     " + ui.yellow("%s changed %s, which the gate also writes; part of the signed "
+                                   "state again" % (event.get("agent"),
+                                                    ", ".join(event.get("paths") or []))))
+        elif kind == "gate_mutates" and event.get("moved_count") == 0:
+            pass    # everything it wrote is a gate output, said by its own line
         elif kind == "gate_mutates":
-            say("     " + ui.yellow("! the gate writes into the workspace"))
+            say("     " + ui.yellow("! the gate writes into the workspace"
+                                    + (": " + ", ".join(event.get("moved")) if event.get("moved") else "")))
             say("     " + ui.dim("  sign-offs are counted against the files as they were before"))
             say("     " + ui.dim("  it ran, so a gate that changes them can keep the two of them"))
             say("     " + ui.dim("  from ever agreeing on the same state. Have it clean up, or"))
@@ -2132,6 +2145,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
         timeout = DEFAULT_GATE_TIMEOUT
 
     ws = Workspace(root, gate=gate_cmd or None, gate_timeout=timeout)
+    # The sign-offs were counted without the gate's own outputs; so is this.
+    ws.gate_outputs = {str(p) for p in data.get("gate_outputs") or [] if str(p).strip()}
     # Digest first, gate second: a gate is free to write files (coverage data,
     # build output), and hashing after it ran would compare the signed state
     # against a workspace the gate itself had already changed.

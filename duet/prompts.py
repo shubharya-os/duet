@@ -154,6 +154,7 @@ def turn_prompt(
     peer_refused: Optional[Sequence[str]] = None,
     turn_timeout: int = 0,
     restarted: str = "",
+    gate_outputs: str = "",
 ) -> str:
     parts: List[str] = []
 
@@ -199,6 +200,8 @@ def turn_prompt(
     )
 
     parts.append("\n=== WORKSPACE (state %s) ===\n%s" % (digest[:8], workspace_view))
+    if gate_outputs:
+        parts.append(gate_outputs)
     if patch_log:
         parts.append("\n=== FILES THE HARNESS WROTE FROM THE LAST ENVELOPE ===\n%s" % "\n".join(patch_log))
     if files:

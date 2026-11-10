@@ -16,7 +16,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from duet.adapters.base import human_duration
 from duet.config import DEFAULT_GATE_TIMEOUT
@@ -306,6 +306,11 @@ class Workspace:
         self.root.mkdir(parents=True, exist_ok=True)
         self.gate = gate
         self.gate_timeout = gate_timeout
+        # Paths the gate itself writes (files, or whole directories it
+        # created), learned by watching it run. Left out of the state id, so a
+        # gate that writes build output does not move it on every run. What may
+        # go here is decided by Orchestrator._learn_gate_outputs.
+        self.gate_outputs: Set[str] = set()
 
     # -- identity ---------------------------------------------------------
     def resolve(self, rel_path: str) -> Path:
@@ -329,28 +334,37 @@ class Workspace:
             raise PatchRejected("refusing to modify %s/" % parts[0])
         return target
 
-    def tracked_files(self) -> List[Path]:
+    def tracked_files(self, include_gate_outputs: bool = False) -> List[Path]:
         """Every file that counts as workspace state, symlinks included.
 
         Symlinks are listed but never followed: retargeting one changes what the
-        project does, so it has to change the state id too.
+        project does, so it has to change the state id too. The gate's own
+        outputs are left out unless asked for: the harness needs them to see
+        what a gate run or a turn changed, but no sign-off depends on them.
         """
         files: List[Path] = []
         ignored = self._ignored_dirs()
+        outputs = set() if include_gate_outputs else self.gate_outputs
         for dirpath, dirnames, filenames in os.walk(self.root):
             here = Path(dirpath)
             dirnames[:] = sorted(
                 d for d in dirnames
                 if d not in SKIP_DIRS
                 and (here / d).relative_to(self.root).as_posix() not in ignored
+                and (here / d).relative_to(self.root).as_posix() not in outputs
             )
             for name in sorted(filenames):
                 if name == ".DS_Store":
                     continue
                 path = Path(dirpath) / name
+                if outputs and path.relative_to(self.root).as_posix() in outputs:
+                    continue
                 if path.is_symlink() or path.is_file():
                     files.append(path)
         return files
+
+    def is_gate_output(self, rel: str) -> bool:
+        return any(rel == out or rel.startswith(out + "/") for out in self.gate_outputs)
 
     def digest(self) -> str:
         """A content hash of the workspace.
@@ -388,15 +402,17 @@ class Workspace:
     def short_digest(self) -> str:
         return self.digest()[:8]
 
-    def fingerprint(self) -> Dict[str, str]:
+    def fingerprint(self, include_gate_outputs: bool = False) -> Dict[str, str]:
         """One hash per file, so a caller can tell *which* files moved.
 
         `digest()` answers "is this the same workspace"; this answers "and if
         not, what changed" — which is the difference between blaming an agent
-        for a whole tree and naming the two files it touched.
+        for a whole tree and naming the two files it touched. With
+        `include_gate_outputs` it is the whole manifest, the gate's own
+        outputs included: what the harness compares around a gate run or a turn.
         """
         out: Dict[str, str] = {}
-        for path in self.tracked_files():
+        for path in self.tracked_files(include_gate_outputs):
             rel = path.relative_to(self.root).as_posix()
             h = hashlib.sha256()
             try:
@@ -450,6 +466,13 @@ class Workspace:
         code, out = self._git("rev-parse", "--is-inside-work-tree")
         return code == 0 and out.strip() == "true"
 
+    def git_tracked(self) -> Set[str]:
+        """Every path git tracks, workspace-relative POSIX; empty outside a repo."""
+        code, out = self._git("ls-files", "-z")
+        if code != 0:
+            return set()
+        return {entry for entry in out.split("\0") if entry}
+
     def untracked_files(self) -> List[str]:
         """Paths git has never seen. New work lives here and in no diff.
 
@@ -467,7 +490,8 @@ class Workspace:
         if code != 0:
             return []
         paths = [entry[3:] for entry in status.split("\0") if entry.startswith("?? ")]
-        return [p for p in paths if p.split("/")[0] not in (".duet", ".git")]
+        return [p for p in paths if p.split("/")[0] not in (".duet", ".git")
+                and not self.is_gate_output(p)]
 
     TRIM_MARKER = "...[trimmed at"
 
@@ -842,6 +866,33 @@ def changed_paths(before: Dict[str, str], after: Dict[str, str]) -> List[str]:
     """Every path added, removed or rewritten between two fingerprints."""
     both = set(before) & set(after)
     return sorted(set(before) ^ set(after) | {p for p in both if before[p] != after[p]})
+
+
+def collapse_outputs(paths: Iterable[str], before: Dict[str, str],
+                     after: Dict[str, str]) -> List[str]:
+    """`paths`, with each directory the gate created whole named once.
+
+    A directory counts as created by the gate when it held no file before the
+    run and every file in it now is one of `paths` — so a build tree of
+    thousands of files is one entry, and a directory that also holds a file
+    the gate may not claim (an agent's, a tracked one) is never swallowed.
+    The shallowest such directory wins.
+    """
+    chosen = set(paths)
+    had_files: Set[str] = set()
+    mixed: Set[str] = set()
+
+    def parents(rel: str) -> List[str]:
+        parts = rel.split("/")
+        return ["/".join(parts[:i]) for i in range(1, len(parts))]
+
+    for rel in before:
+        had_files.update(parents(rel))
+    for rel in after:
+        if rel not in chosen:
+            mixed.update(parents(rel))
+    return sorted({next((d for d in parents(rel) if d not in had_files and d not in mixed), rel)
+                   for rel in chosen})
 
 
 def quote(command: Sequence[str]) -> str:
