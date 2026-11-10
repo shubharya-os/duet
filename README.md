@@ -873,6 +873,22 @@ terminal and the report. It is how an agent that cannot build (an Xcode project 
 `acceptEdits`) gets a compile check without voting BLOCKED, which stops the session.
 One run per turn; a state whose gate already ran is answered from that run.
 
+An agent that wants to run the gate itself during its turn runs `duet gate` — not
+the raw command wrapped in `> log 2>&1`, `| tail` or `| tee`, which Claude Code's
+permission mode refuses piece by piece. It runs the session's own gate in the
+workspace with the session's `--gate-timeout`, prints what the harness would show
+(failures first, then head and tail), saves the whole output as
+`.duet/sessions/<id>/agent-gate-<n>-<state>.log` and names it, and exits with the
+gate's own code (124 if it ran out of time; 2 outside a session or with no gate).
+It starts no agents, so it works inside a session where `duet run` is refused.
+Each run is recorded in `.duet/sessions/<id>/agent-gates.jsonl` with the state
+before and after and every path it changed. After the turn the harness learns the
+gate's outputs from those runs exactly as from its own — never a path the agent
+also edited, a git-tracked file or a test — and tells the peer the agent ran the
+gate and what it said. It is never the harness's gate: a sign-off is only counted
+against the harness's own run on the exact state, so `"run_gate": true` is still
+how to have that happen.
+
 When the gate's output is too long to show whole, the lines naming what failed —
 pytest, unittest, XCTest/xcodebuild, swiftc, jest/vitest, go, cargo, and a Python
 traceback's last line — are pulled out of all of it and shown first, then the head
@@ -1011,7 +1027,12 @@ ERROR` would be.
 - **The agents write to your working directory.** Run it on a branch you can throw away.
   duet refuses to write outside the workspace, or into `.git/` and `.duet/`.
 - Claude Code runs under `acceptEdits`, not a blanket bypass, and is granted Bash for
-  your gate's own commands and nothing wider.
+  your gate's own commands, `duet gate` when there is a gate, and plainly read-only
+  commands: `cat`, `head`, `tail`, `grep`, `wc`, `ls` and `git status` — nothing wider.
+  Claude Code checks each part of a compound command and every output redirection
+  on its own, so these do not open up `cat a > /tmp/x` or `cat a | sh`. `git diff`,
+  `git show` and `git log` are left out: their `--output=<file>` writes anywhere
+  without a redirection, and a rule cannot exclude it. Never a broad `git` rule.
 - **Two agents cost roughly twice one agent, times the rounds.** `--rounds` is the
   throttle; the default of 12 is deliberately modest. `duet review` is a single call.
 - duet holds no credentials. Each CLI owns its own sign-in.

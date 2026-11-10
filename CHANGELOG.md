@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+- Agents get a sanctioned way to run the gate: `duet gate`. Measured on 262 real
+  sessions on duet 0.15+, 144 (55%) had refused calls, 466 in all; the largest
+  group, 136 calls in 72 sessions (27%), was an agent running the gate itself
+  with a wrapper — `./scripts/gate.sh > /tmp/gate.log 2>&1; echo exit=$?`,
+  `... 2>&1 | tail -60`, `... | tee log` — which the permission mode refuses
+  piece by piece. `duet gate` runs the session's own gate in the workspace with
+  the session's gate timeout, prints what the harness would show (failures
+  first, head and tail), saves the whole output in the session directory and
+  names it, and exits with the gate's code (124 for a timeout, 2 outside a
+  session or with no gate). It starts no agents, so the nesting guard does not
+  refuse it. Claude Code is granted it whenever the session has a gate; Codex
+  runs it in its sandbox.
+- Each `duet gate` run is recorded in `.duet/sessions/<id>/agent-gates.jsonl`
+  (state before and after, and every path it changed), and after the turn the
+  harness learns the gate's outputs from it exactly as from its own runs, with
+  all of 0.17's rules: never a path the agent also edited — before, between or
+  after its runs — never a git-tracked file, never a test. That closes 0.17's
+  gap where an agent running a gate that writes build output made the output
+  look like its own change, and the state moved on every harness run after.
+  The peer is told the agent ran the gate and what it said (`agent_gate`
+  events, a line in the history). An agent's run never counts as the harness's
+  gate: sign-offs still need the harness's own run on the exact state.
+- Claude Code may run plainly read-only commands: `cat` (42 refused calls in
+  those sessions), `head`, `tail`, `grep`, `wc`, `ls` and `git status`. Claude
+  Code checks every part of a compound command and every output redirection on
+  its own, so this opens no write. `git diff`, `git show` and `git log` are left
+  out — their `--output=<file>` writes anywhere without a redirection, and a
+  rule's wildcard only works at its end — and there is never a broad `git` rule.
+- The agents are told to run the gate with `duet gate`, that `"run_gate": true`
+  is still how the harness's own run happens, and to make file changes with
+  their edit tools rather than `sed`, `cp`, `mkdir`, `rm` (50, 22, 20 and 11
+  refused calls).
+
 ## 0.17.0
 
 - A gate that writes into the workspace no longer keeps two agents from ever

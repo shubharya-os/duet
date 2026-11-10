@@ -124,6 +124,41 @@ class ClaudeCodeAdapter(Adapter):
                 self.allowed_tools.append(tool)
         return "web tools allowed (%s)" % ", ".join(self.WEB_TOOLS)
 
+    # Plainly read-only commands, allowed in every session. Measured on 262
+    # sessions on duet 0.15+, `cat` alone was refused 42 times, and the agent
+    # then either guessed or spent a call on the Read tool for the same bytes.
+    #
+    # How Claude Code matches these (code.claude.com/docs/en/permissions):
+    # `Bash(cat:*)` is `Bash(cat *)` — the space is a word boundary, so it does
+    # not match `catdoc`. A compound command is split on `&&`, `||`, `;`, `|`
+    # and the rest, and every part must be allowed on its own, so `cat a | sh`
+    # or `cat a; rm b` is still refused. An output redirection is checked as a
+    # file write whatever rule allowed the command — under `acceptEdits` that
+    # is the working directory only, which the Edit tool can already write — so
+    # `cat a > /tmp/x` stays refused. None of these commands has an option that
+    # writes a file of its own.
+    #
+    # Left out on purpose:
+    # - `git diff`, `git show` and `git log`: each takes `--output=<file>` and
+    #   writes its output there itself — any path, outside the workspace too,
+    #   with content an agent controls through a commit message — and no shell
+    #   redirection is involved for Claude Code to check. A rule's wildcard
+    #   only works at its end, so no rule can allow them without `--output`.
+    #   The agents are shown the diff in every prompt.
+    # - `git:*`, or any git subcommand beyond `status`: push, commit, checkout
+    #   and reset are all one prefix away.
+    # - `find` (`-delete`, `-exec`) and `sed` (`-i`, `w`): both write.
+    READ_ONLY_RULES = (
+        "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(grep:*)",
+        "Bash(wc:*)", "Bash(ls:*)", "Bash(git status:*)",
+    )
+
+    def permitted_tools(self) -> List[str]:
+        """What `--allowedTools` is given: the session's grants, then the
+        read-only commands. `allowed_tools` stays what was granted, so it still
+        says what this session added."""
+        return self.allowed_tools + [r for r in self.READ_ONLY_RULES if r not in self.allowed_tools]
+
     def _command(self, prompt: str, system: str) -> List[str]:
         cmd = list(self.launch) + ["-p", prompt, "--output-format", "json"]
         if self.permission_mode == "bypass":
@@ -136,8 +171,9 @@ class ClaudeCodeAdapter(Adapter):
             cmd += ["--append-system-prompt", system]
         if self.session_id:
             cmd += ["--resume", self.session_id]
-        if self.allowed_tools:
-            cmd += ["--allowedTools", " ".join(self.allowed_tools)]
+        tools = self.permitted_tools()
+        if tools:
+            cmd += ["--allowedTools", " ".join(tools)]
         if self.disallowed_tools:
             cmd += ["--disallowedTools", " ".join(self.disallowed_tools)]
         cmd += self.extra_args
@@ -166,6 +202,17 @@ class ClaudeCodeAdapter(Adapter):
             rule = "Bash(%s:*)" % parts[0]
             if rule not in self.allowed_tools:
                 self.allowed_tools.append(rule)
+
+    def allow_agent_gate(self, command: str) -> None:
+        """Permit `duet gate` — the whole command, as the agent is told to type it.
+
+        The rule is for that exact prefix, never `duet:*`: `duet run` starts a
+        whole second pair of agents. (A page gate already grants `duet:*`
+        through allow_gate; that is the gate's own command, not this.)
+        """
+        rule = "Bash(%s:*)" % command.strip()
+        if command.strip() and rule not in self.allowed_tools:
+            self.allowed_tools.append(rule)
 
     @staticmethod
     def _extract(payload: Any) -> Dict[str, Any]:

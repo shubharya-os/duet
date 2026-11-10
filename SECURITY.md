@@ -36,7 +36,9 @@ hand; duet's contribution is that it stops being you doing the pasting.
   when you do not pass one, and prints what it picked, precisely so an unexpected
   command cannot run unnoticed.
 - Claude Code runs under `acceptEdits`, not a blanket bypass, and is granted Bash
-  scoped to your gate's own commands.
+  scoped to your gate's own commands, `duet gate` (which runs that same gate), and
+  the read-only `cat`, `head`, `tail`, `grep`, `wc`, `ls` and `git status`. Not
+  `git diff`, `git show` or `git log`, whose `--output=<file>` writes a file.
 - `duet build` writes `.duet/gate_unittest.py` when your machine has no test
   runner. It is duet's own file, in duet's own directory, and it only discovers
   and runs test files under the workspace.
@@ -59,6 +61,14 @@ excludes it from commits.
   would be if you opened that repository in Claude Code directly.
 - **A task is not a sandbox.** duet constrains where patches land; it does not
   sandbox what your gate command does.
+- **duet guards against careless agents, not hostile ones.** Its checks catch a
+  pair that agrees too easily: tests that test nothing, a gate that was never run,
+  a sign-off on files that changed since. An agent set on cheating could edit the
+  gate script in your workspace, or forge the record of a `duet gate` run that the
+  harness keeps in the session folder. duet only trusts a forged record of that
+  kind for untracked, non-test files the agent has not edited by hand, and it never
+  counts the agent's own gate run toward a sign-off. Still, review what a session
+  changed before you ship it, as you would any contributor's work.
 
 ## Reporting a vulnerability
 
