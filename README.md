@@ -840,7 +840,7 @@ duet sessions        # every session in this workspace
 ```
 
 Useful flags for `run`: `--gate` (your tests — the most valuable one), `--pair`,
-`--rounds`, `--turn-timeout MINUTES`, `--gate-timeout MINUTES`, `--fresh-gate`, `--gate-every-turn`, `--accept "what done means"`, `--swap N` to
+`--rounds`, `--turn-timeout MINUTES`, `--gate-timeout MINUTES`, `--fresh-gate`, `--gate-every-turn`, `--final-gate CMD`, `--accept "what done means"`, `--swap N` to
 trade places, `--commit`, `--json`, `--detach` (run it as its own process and
 return at once — see "Surviving the thing that launched it" below).
 
@@ -920,6 +920,40 @@ session, so the pair still cannot finish without a fresh green run. `--fresh-gat
 on any session command or on `duet resume` ignores the cache for that run;
 `duet verify` always runs the gate fresh. A cache file that is corrupt or unreadable
 is treated as empty.
+
+### Two gates: a fast one for every turn, a slow one before consensus
+
+When the whole suite is slow — unit tests plus a half-hour UI-test run — most gate
+runs only need to know whether the code compiles and the unit tests pass. Give the
+slow part its own command:
+
+```bash
+duet add "..." --gate "swift test --package-path Kit" --final-gate "bash scripts/full-gate.sh"
+```
+
+`--gate` keeps doing everything described above: the opening check, the run after
+DONE or BLOCKED, `"run_gate": true`, `duet gate`, remembered passes, deferral, the
+flaky re-run and gate outputs. The final gate runs only when the pair would otherwise
+finish — both signed off on the same state, nothing blocking open, the fast gate green
+on it and the workflow rule (if any) met — on exactly that state, with the same time
+limit, process-group stop, failures-first output, saved log
+(`.duet/sessions/<id>/final-gate-<state>.log`) and gate-output learning as the fast
+gate. Green, and it is a consensus; the report says both gates passed on that state.
+Red or out of time, and it is not: both sign-offs are cleared, both agents are shown
+its output as the reason on their next turn, and the session goes on. Its result is
+kept per state, so the same files are never final-gated twice in a session (a failure
+gets the one flaky re-run the fast gate's does); it is never remembered across
+sessions and never deferred. Both agents are told there are two gates, what each
+command is, and that `run_gate` and `duet gate` run the fast one.
+
+It is saved with the session and kept by `duet resume` (`--final-gate` there replaces
+it), can be set as `"final_gate"` in `.duet/config.json`, and is shown in the session
+header, `duet status` and the report. Without it, nothing changes.
+
+The workflow rules keep using the fast gate: `fix` and `add` replay it against the
+original code, `build` checks it is red before any code exists, and `refactor` checks
+it is green at the start. So a feature whose only test lives in the final gate cannot
+satisfy `add` — the pair must add a test the fast gate runs.
 
 If a turn is cut off after it has changed the workspace, that is progress and not
 a failure: the peer takes the next turn on the files it left, and is told the

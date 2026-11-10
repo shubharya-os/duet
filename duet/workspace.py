@@ -749,16 +749,21 @@ class Workspace:
         return log
 
     # -- verification -----------------------------------------------------
-    def run_gate(self) -> GateResult:
-        """Run the acceptance command. Neither agent gets to skip this."""
-        if not self.gate:
+    def run_gate(self, command: Optional[str] = None) -> GateResult:
+        """Run the acceptance command. Neither agent gets to skip this.
+
+        `command` runs another gate the same way — the final gate, which gets
+        the same time limit, process-group stop and output as this one.
+        """
+        command = command or self.gate
+        if not command:
             return GateResult(command="", ok=True, exit_code=0, output="", skipped=True)
         started = time.monotonic()
         try:
             # Its own process group, so stopping the gate stops the test runner
             # under the shell too — killing only the shell left it running on.
             proc = subprocess.Popen(
-                self.gate,
+                command,
                 cwd=str(self.root),
                 shell=True,
                 stdin=subprocess.DEVNULL,
@@ -769,7 +774,7 @@ class Workspace:
                 start_new_session=os.name == "posix",
             )
         except OSError as exc:
-            return GateResult(command=self.gate, ok=False, exit_code=127, output=str(exc))
+            return GateResult(command=command, ok=False, exit_code=127, output=str(exc))
         try:
             stdout, stderr = proc.communicate(timeout=self.gate_timeout)
         except subprocess.TimeoutExpired:
@@ -779,7 +784,7 @@ class Workspace:
             # is the first thing anyone deciding on a longer limit wants to see.
             partial = (stdout or "") + (stderr or "")
             return GateResult(
-                command=self.gate,
+                command=command,
                 ok=False,
                 exit_code=124,
                 output=partial,
@@ -793,7 +798,7 @@ class Workspace:
             raise
         output = (stdout or "") + (stderr or "")
         return GateResult(
-            command=self.gate,
+            command=command,
             ok=proc.returncode == 0,
             exit_code=proc.returncode,
             output=output,

@@ -266,6 +266,8 @@ class SessionResult:
     gate: Optional[GateResult] = None
     session_dir: str = ""
     report: str = ""
+    # `--final-gate`'s result on the final state, when it ran on it.
+    final_gate: Optional[GateResult] = None
 
     @property
     def ok(self) -> bool:
@@ -336,6 +338,12 @@ class Orchestrator:
         self.pending_restarted: Dict[str, str] = {}
         self.last_envelope: Dict[str, Envelope] = {}
         self._gate_cache: Dict[str, GateResult] = {}
+        # The final gate's results (`--final-gate`), per digest, and the
+        # digests whose failure has had its one re-run. Never remembered across
+        # sessions and never deferred: it only ever runs where a consensus
+        # would otherwise be reached. See final_gate_for.
+        self._final_cache: Dict[str, GateResult] = {}
+        self._final_rechecked: Set[str] = set()
         # Passes from earlier sessions, shown for the opening check and kept
         # apart from _gate_cache so no sign-off is ever counted against one.
         self._remembered: Dict[str, GateResult] = {}
@@ -412,9 +420,10 @@ class Orchestrator:
         event = dict(kind=kind, t=time.time(), **payload)
         if kind == "turn_start":
             self.doing = "during %s's turn in round %s" % (payload.get("agent"), payload.get("round"))
-        elif kind == "gate_start":
-            self.doing = "while the gate was running" + (" in round %d" % self._round if self._round else "")
-        elif kind in ("turn_done", "gate_done", "gate_remembered"):
+        elif kind in ("gate_start", "final_gate_start"):
+            self.doing = ("while the %sgate was running" % ("final " if kind == "final_gate_start" else "")
+                          + (" in round %d" % self._round if self._round else ""))
+        elif kind in ("turn_done", "gate_done", "gate_remembered", "final_gate_done"):
             self.doing = ("between turns in round %d" % self._round) if self._round else "while starting up"
         self.reporter(event)
         try:
@@ -509,13 +518,54 @@ class Orchestrator:
             self._check_gate_is_read_only(digest, manifest or {})
         return result
 
-    def _save_gate_log(self, digest: str, result: GateResult) -> None:
+    def final_gate_for(self, digest: str) -> GateResult:
+        """The final gate's result for `digest` (`--final-gate`), run once and cached.
+
+        Asked for only where a consensus would otherwise be reached, so a
+        cached failure being asked for again means both agents signed off once
+        more on files nobody changed: like the fast gate's, that failure is
+        re-run once before it is settled, and a pass on the re-run is used and
+        called possibly flaky. Never remembered in .duet/gate-cache.json — a
+        session always runs it on the state it agrees on.
+        """
+        if digest not in self._final_cache:
+            self._final_cache[digest] = self._run_final_gate(digest)
+        elif digest not in self._final_rechecked:
+            first = self._final_cache[digest]
+            if not first.ok:
+                self._final_rechecked.add(digest)
+                self.emit("final_gate_rerun", digest=digest, timed_out=first.timed_out)
+                again = self._run_final_gate(digest)
+                if again.ok:
+                    names = failing_tests(first.output)
+                    again.flaky = (
+                        "the final gate %s once and passed on a re-run with no file changes — "
+                        "possibly flaky%s" % (
+                            "ran out of time" if first.timed_out else "failed",
+                            ": " + ", ".join(names) if names else ""))
+                    self.emit("final_gate_flaky", digest=digest, note=again.flaky, tests=names)
+                self._final_cache[digest] = again
+        return self._final_cache[digest]
+
+    def _run_final_gate(self, digest: str) -> GateResult:
+        command = self.config.final_gate
+        manifest = self.workspace.fingerprint(include_gate_outputs=True)
+        self.emit("final_gate_start", command=command, digest=digest)
+        result = self.workspace.run_gate(command)
+        self._save_gate_log(digest, result, prefix="final-gate")
+        self.emit("final_gate_done", ok=result.ok, exit_code=result.exit_code, digest=digest,
+                  timed_out=result.timed_out, timeout=result.timeout)
+        # What it writes is learned as gate output, as for the fast gate.
+        self._check_gate_is_read_only(digest, manifest)
+        return result
+
+    def _save_gate_log(self, digest: str, result: GateResult, prefix: str = "gate") -> None:
         """Keep the whole output of a run where the agents can open it.
 
         What they are shown is trimmed to fit a prompt; this is the rest of it,
         one file per state (a re-run on the same files replaces it).
         """
-        path = self.session_dir / ("gate-%s.log" % digest[:8])
+        path = self.session_dir / ("%s-%s.log" % (prefix, digest[:8]))
         try:
             self.session_dir.mkdir(parents=True, exist_ok=True)
             path.write_text("$ %s\n%s\n%s" % (result.command, result.headline(), result.output),
@@ -529,7 +579,7 @@ class Orchestrator:
         `reads`: the workspace refuses .duet/, but the trimmed gate output
         points here, so this one file in it has to be readable."""
         name = Path(path).name
-        if not re.fullmatch(r"gate-[0-9a-f]{8}\.log", name):
+        if not re.fullmatch(r"(final-)?gate-[0-9a-f]{8}\.log", name):
             return None
         target = self.session_dir / name
         asked = Path(path)
@@ -866,6 +916,8 @@ class Orchestrator:
             edits_workspace=adapter.edits_workspace,
             gate_command=self.agent_gate_command,
             notes=adapter.workspace_notes(self.config.root),
+            gate=self.config.gate,
+            final_gate=self.config.final_gate,
         )
 
     def _note_model_fallback(self, agent: str, round_no: int, reply: Any) -> None:
@@ -1324,6 +1376,31 @@ class Orchestrator:
         self.workspace.gate_outputs = {str(p) for p in data.get("gate_outputs") or []
                                        if str(p).strip() and str(p) not in self.agent_changed}
 
+        # A final-gate result belongs to this session, not the cross-session
+        # gate cache. Keep it over `duet resume` so a completed check on the
+        # same digest is not repeated after a process restart. A changed
+        # command invalidates these results.
+        for digest, raw in (data.get("final_gate_cache") or {}).items():
+            if (self.config.final_gate and isinstance(raw, dict)
+                    and raw.get("command") == self.config.final_gate):
+                log = str(raw.get("log") or "")
+                output = ""
+                if log:
+                    try:
+                        saved_log = Path(log).read_text(encoding="utf-8", errors="replace")
+                        parts = saved_log.split("\n", 2)
+                        output = parts[2] if len(parts) > 2 else ""
+                    except OSError:
+                        pass
+                self._final_cache[str(digest)] = GateResult(
+                    command=self.config.final_gate, ok=bool(raw.get("ok")),
+                    exit_code=int(raw.get("exit_code", 1)), output=output,
+                    timed_out=bool(raw.get("timed_out")), timeout=int(raw.get("timeout", 0)),
+                    flaky=str(raw.get("flaky") or ""), log=log,
+                )
+                if raw.get("rechecked"):
+                    self._final_rechecked.add(str(digest))
+
         # A BLOCKED verdict is why that session stopped. The human has since
         # asked for it to carry on, so it is history, not a live position:
         # leaving it in place would end the resumed session after one turn,
@@ -1374,6 +1451,8 @@ class Orchestrator:
             # How it was started, for `duet status` to offer again if it dies
             # before saving anything a resume could carry on from.
             started_with=cfg.started_with or None,
+            # Only when there is one: a session without it logs as it always has.
+            **({"final_gate": cfg.final_gate} if cfg.final_gate else {}),
         )
         previous = self._install_stop_handlers()
         try:
@@ -1530,6 +1609,23 @@ class Orchestrator:
                         self.emit("workflow_proven", workflow=self.workflow.name, detail=proven)
                 if decision.kind == "consensus" and cfg.jury and self.convene_jury(round_no):
                     continue
+                if decision.kind == "consensus" and cfg.final_gate:
+                    # Everything else agrees on this state; the final gate is
+                    # the one check left, run on exactly these files.
+                    final = self.final_gate_for(record.digest)
+                    if not final.ok:
+                        self.emit("final_gate_veto", digest=record.digest,
+                                  timed_out=final.timed_out, exit_code=final.exit_code)
+                        self.state.signoffs.clear()
+                        for name in cfg.agent_names:
+                            self.pending_directive[name] = (
+                                "THE FINAL GATE %s ON THIS STATE, SO THE SIGN-OFFS DO NOT COUNT\n\n"
+                                "Both of you signed off and the fast gate passed, but the final "
+                                "gate did not:\n\n%s\n\n"
+                                % ("TIMED OUT" if final.timed_out else "FAILED", final.render())
+                            ) + prompts.NORMAL_DIRECTIVE
+                        self._save()
+                        continue
                 if decision.kind == "consensus":
                     status, reason = STATUS_CONSENSUS, decision.reason
                     break
@@ -1586,6 +1682,7 @@ class Orchestrator:
             reason=reason,
             gate=gate,
             session_dir=str(self.session_dir),
+            final_gate=self._final_cache.get(digest),
         )
         os.environ.pop("DUET_SESSION", None)
         result.report = self.write_report(result)
@@ -1618,6 +1715,13 @@ class Orchestrator:
                 "pending_restarted": dict(self.pending_restarted),
                 "gate_outputs": sorted(self.workspace.gate_outputs),
                 "agent_changed": sorted(self.agent_changed),
+                "final_gate_cache": {
+                    digest: {"command": result.command, "ok": result.ok,
+                             "exit_code": result.exit_code, "timed_out": result.timed_out,
+                             "timeout": result.timeout, "flaky": result.flaky,
+                             "log": result.log, "rechecked": digest in self._final_rechecked}
+                    for digest, result in self._final_cache.items()
+                },
                 "result": (
                     {"status": result.status, "rounds": result.rounds, "reason": result.reason}
                     if result
@@ -1699,6 +1803,20 @@ class Orchestrator:
             lines += ["", "## Acceptance gate", "", "```", result.gate.render(1500), "```"]
             if result.gate.log:
                 lines += ["", "Full output: [%s](%s)" % (Path(result.gate.log).name, result.gate.log)]
+        if self.config.final_gate:
+            lines += ["", "## Final gate", "", "`%s` — run only when both agents would otherwise "
+                      "have agreed." % self.config.final_gate, ""]
+            final = result.final_gate
+            if result.status == STATUS_CONSENSUS and final and final.ok:
+                lines.append("Both gates passed on state `%s`: the fast gate and the final gate."
+                             % result.digest[:8])
+            elif final:
+                lines += ["```", final.render(1500), "```"]
+            else:
+                lines.append("Not run on state `%s`: the pair never agreed on it."
+                             % result.digest[:8])
+            if final and final.log:
+                lines += ["", "Full output: [%s](%s)" % (Path(final.log).name, final.log)]
         outputs = self.gate_outputs_line()
         if outputs:
             lines += ["", outputs]
@@ -1750,7 +1868,10 @@ class Orchestrator:
                                                   result.gate.problem())
             else:
                 reasons = self.state.why_not_done(result.digest, False)
-            lines += ["- %s" % r for r in reasons] or ["- nothing recorded"]
+            if result.final_gate and not result.final_gate.ok:
+                reasons.append("the final gate %s on this state" % (
+                    "ran out of time" if result.final_gate.timed_out else "is failing"))
+            lines +=["- %s" % r for r in reasons] or ["- nothing recorded"]
             if open_issues:
                 lines.append("")
         if result.status == STATUS_INTERRUPTED:

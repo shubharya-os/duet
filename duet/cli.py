@@ -72,6 +72,12 @@ GATE_EVERY_TURN_HELP = (
     "the gate deferred until someone votes DONE; it always runs before a sign-off "
     "is counted."
 )
+FINAL_GATE_HELP = (
+    "a slower gate run only when both agents would otherwise agree: both signed "
+    "off on one state, nothing blocking, --gate green on it. If it fails, the "
+    "sign-offs are cleared and the session goes on. --gate stays the gate for "
+    "every turn, run_gate, `duet gate` and the workflow rules."
+)
 DETACH_HELP = (
     "start this as its own process group and return at once, printing the "
     "session id and log path — so the shell that launched it (an agent's tool "
@@ -107,6 +113,9 @@ def make_reporter(agents: List[str], verbose: bool = True, as_json: bool = False
             else:
                 say("  %s %s" % (ui.dim("gate:     "),
                                  ui.yellow("none — they can only agree by argument")))
+            if event.get("final_gate"):
+                say("  %s %s%s" % (ui.dim("final:    "), event["final_gate"],
+                                   ui.dim("  (only before consensus)")))
             say("  %s %s goes first, up to %d rounds"
                   % (ui.dim("order:    "), (event.get("order") or ["?"])[0], event.get("max_rounds", 0)))
             budgets = sorted({int(v) for v in (event.get("turn_timeout") or {}).values()})
@@ -205,8 +214,26 @@ def make_reporter(agents: List[str], verbose: bool = True, as_json: bool = False
             say("     " + ui.dim("nothing changed since the gate %s; re-running it once before "
                                  "believing it" % ("ran out of time" if event.get("timed_out")
                                                    else "failed")))
-        elif kind == "gate_flaky":
+        elif kind in ("gate_flaky", "final_gate_flaky"):
             say("     " + ui.yellow("! " + str(event.get("note") or "")))
+        elif kind == "final_gate_start":
+            say("     " + ui.dim("both signed off; running the final gate: %s" % event.get("command")))
+        elif kind == "final_gate_done":
+            if event.get("ok"):
+                say("     " + ui.green("final gate passed"))
+            elif event.get("timed_out"):
+                say("     " + ui.yellow("the final gate ran out of time after %s; this is not a test "
+                                        "failure" % human_duration(event.get("timeout")))
+                    + ui.dim(" (give it longer with --gate-timeout MINUTES)"))
+            else:
+                say("     " + ui.red("final gate failed (exit %s)" % event.get("exit_code")))
+        elif kind == "final_gate_rerun":
+            say("     " + ui.dim("nothing changed since the final gate %s; re-running it once before "
+                                 "believing it" % ("ran out of time" if event.get("timed_out")
+                                                   else "failed")))
+        elif kind == "final_gate_veto":
+            say("  " + ui.yellow("✗ both signed off, but the final gate did not pass"))
+            say("    " + ui.dim("sign-offs cleared; both agents will be shown its output"))
         elif kind == "workflow_proven":
             say("  " + ui.green("✓ `%s` rule met: " % event.get("workflow")) + str(event.get("detail") or ""))
         elif kind == "workflow_veto":
@@ -398,6 +425,8 @@ def build_config(args: argparse.Namespace) -> Config:
     cfg.started_with = [a for a in getattr(args, "started_with", None) or [] if a != "--detach"]
     if getattr(args, "gate_every_turn", False):
         cfg.gate_every_turn = True
+    if getattr(args, "final_gate", None) is not None:
+        cfg.final_gate = args.final_gate
     if getattr(args, "quick", False):
         cfg.workflow_state["quick"] = True
     # `duet make`: the must-haves a plan has to name, and the references a
@@ -1673,7 +1702,9 @@ def _what_it_was_doing(events: List[Dict[str, Any]]) -> str:
             return "during %s's turn in round %s" % (event.get("agent"), event.get("round"))
         if kind == "gate_start":
             return "while the gate was running"
-        if kind in ("turn_done", "gate_done"):
+        if kind == "final_gate_start":
+            return "while the final gate was running"
+        if kind in ("turn_done", "gate_done", "final_gate_done"):
             return "after round %s" % event.get("round") if event.get("round") else "between turns"
     return "while starting up"
 
@@ -1746,6 +1777,8 @@ def restart_command(start: Dict[str, Any], root: str) -> str:
         argv = ["run", task or "..."]
         if start.get("gate"):
             argv += ["--gate", str(start["gate"])]
+        if start.get("final_gate"):
+            argv += ["--final-gate", str(start["final_gate"])]
         if start.get("max_rounds"):
             argv += ["--rounds", str(start["max_rounds"])]
     command = "duet " + " ".join(shlex.quote(a) for a in argv)
@@ -1874,6 +1907,10 @@ def cmd_status(args: argparse.Namespace) -> int:
             # The last turn whose gate ran: a deferred one records None.
             "gate_ok": next((t.get("gate_ok") for t in reversed(turns)
                              if t.get("gate_ok") is not None), None),
+            **({"final_gate": start["final_gate"],
+                "final_gate_ok": next((e.get("ok") for e in reversed(events)
+                                       if e.get("kind") == "final_gate_done"), None)}
+               if start.get("final_gate") else {}),
             "duet_version": start.get("duet_version"),
         }, default=str))
         return 0 if not running and (end or {}).get("status") == STATUS_CONSENSUS else (0 if running else 1)
@@ -1945,6 +1982,17 @@ def cmd_status(args: argparse.Namespace) -> int:
         else:
             shown = ui.red("failing")
         print("  gate:    " + shown)
+    if start.get("final_gate"):
+        final_run = next((e for e in reversed(events) if e.get("kind") == "final_gate_done"), None)
+        if final_run is None:
+            shown = ui.dim("not run yet — it runs only before consensus")
+        elif final_run.get("ok"):
+            shown = ui.green("passed") + ui.dim(" on %s" % str(final_run.get("digest") or "")[:8])
+        elif final_run.get("timed_out"):
+            shown = ui.yellow("ran out of time on %s" % str(final_run.get("digest") or "")[:8])
+        else:
+            shown = ui.red("failed on %s" % str(final_run.get("digest") or "")[:8])
+        print("  final:   %s  %s" % (start["final_gate"], shown))
     if running:
         print()
         print(ui.dim("  follow it live: ") + ui.bold("duet report --transcript"))
@@ -2419,6 +2467,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
     # Kept from the saved session; the flag can only turn it on.
     if getattr(args, "gate_every_turn", False):
         cfg.gate_every_turn = True
+    # Kept from the saved session unless replaced, like --gate.
+    if getattr(args, "final_gate", None) is not None:
+        cfg.final_gate = args.final_gate
 
     reason, fixes = _resume_blocker(data, path.name, cfg.max_rounds)
     if reason:
@@ -2946,6 +2997,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--gate-timeout", type=int, metavar="MINUTES", help=GATE_TIMEOUT_HELP)
     p_run.add_argument("--fresh-gate", action="store_true", help=FRESH_GATE_HELP)
     p_run.add_argument("--gate-every-turn", action="store_true", help=GATE_EVERY_TURN_HELP)
+    p_run.add_argument("--final-gate", metavar="CMD", help=FINAL_GATE_HELP)
     p_run.add_argument("--max-debate", type=int, help="rounds an issue may stay open before arbitration (default 3)")
     p_run.add_argument(
         "--pair",
@@ -2985,6 +3037,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--gate-timeout", type=int, metavar="MINUTES", help=GATE_TIMEOUT_HELP)
         p.add_argument("--fresh-gate", action="store_true", help=FRESH_GATE_HELP)
         p.add_argument("--gate-every-turn", action="store_true", help=GATE_EVERY_TURN_HELP)
+        p.add_argument("--final-gate", metavar="CMD", help=FINAL_GATE_HELP)
         p.add_argument("--max-debate", type=int,
                        help="rounds an issue may stay open before arbitration (default 3)")
         p.add_argument("--pair", metavar="A+B", help="which two agents, and who leads")
@@ -3178,6 +3231,9 @@ def build_parser() -> argparse.ArgumentParser:
                                "agents by position (e.g. claude:opus+claude:sonnet)")
     p_resume.add_argument("--gate", metavar="CMD",
                           help="use this gate instead of the one the session recorded")
+    p_resume.add_argument("--final-gate", metavar="CMD",
+                          help=FINAL_GATE_HELP + " Without it, the final gate the session "
+                               "was started with is kept.")
     p_resume.add_argument("--allow-nested", action="store_true",
                           help="permit starting this from inside another duet session")
     p_resume.add_argument("--detach", action="store_true", help=DETACH_HELP)
