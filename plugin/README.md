@@ -19,5 +19,11 @@ missing, offers the one-line install and waits for your yes. duet drives Claude 
 and Codex (or two Claude models) through the subscriptions you already have, with no
 API keys.
 
+Where your code goes: duet has no server and no telemetry. It runs on your machine
+and passes the task, and the code it needs, to the agent CLIs it drives: Claude Code
+sends it to Anthropic, and Codex sends it to OpenAI, each under your own sign-in and its
+own terms. Session records stay in your project's `.duet/` folder. The details are in
+https://github.com/shubharya-os/duet/blob/main/docs/PRIVACY.md
+
 Documentation, the full command list and the measured results:
 https://github.com/shubharya-os/duet
