@@ -41,7 +41,7 @@ How this actually works:
 - `run_gate` is for the full gate: when you would otherwise vote DONE, or when
   a faster check you can run yourself cannot answer the question. It is not
   the way to find out whether code compiles when you can compile it yourself:
-  a full gate can take half an hour.{gate_channel}{notes}
+  a full gate can take half an hour.{gate_channel}{two_gates}{notes}
 - The session ends when you BOTH vote DONE on the same workspace state with no
   blocking issue open and the gate green. Your peer's DONE cannot end it without
   yours, and yours cannot end it without theirs.
@@ -103,6 +103,16 @@ _RUN_THE_GATE = """
   `head`, `tail`, `grep`, `wc`, `ls`, `git status`."""
 
 
+# Only for a session with `--final-gate`; without one the prompt is unchanged.
+_TWO_GATES = """
+- This session has two gates. The fast gate, `{gate}`, is the acceptance gate you are
+  shown each turn: it runs on the states you vote on, for "run_gate": true and for `duet gate`.
+  The final gate, `{final_gate}`, runs only before consensus — once you have
+  both signed off on the same state, nothing blocking is open and the fast gate
+  is green on it. If it fails, both sign-offs are cleared and you are both
+  shown its output. Neither "run_gate" nor `duet gate` runs the final gate."""
+
+
 def system_prompt(
     *,
     name: str,
@@ -114,10 +124,14 @@ def system_prompt(
     edits_workspace: bool,
     gate_command: str = "",
     notes: str = "",
+    gate: str = "",
+    final_gate: str = "",
 ) -> str:
     return (
         _IDENTITY.format(
             notes=notes,
+            two_gates=(_TWO_GATES.format(gate=gate or "(none)", final_gate=final_gate)
+                       if final_gate else ""),
             gate_channel=(_RUN_THE_GATE.format(command=gate_command)
                           if gate_command and edits_workspace else ""),
             display=display,

@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+- `--final-gate CMD`: a two-tier gate — the fast gate (`--gate`) for every turn,
+  and a slow final gate only before consensus. Measured on real sessions on duet
+  0.17 (iOS projects whose gate is unit tests plus an Xcode UI-test run, ~30
+  minutes each run), two sessions spent 87% and 69% of their wall time in the
+  gate (7 hours and 2.8 hours in all), running it 12 and 6 times; most of those
+  runs only needed to know whether the code compiles and the unit tests pass.
+  - `--gate` keeps doing everything it does today: the opening gate, the run
+    after DONE/BLOCKED, `run_gate` requests, `duet gate`, remembered passes,
+    deferral, the flaky re-run and gate outputs.
+  - The final gate runs only when consensus would otherwise be reached — both
+    agents signed off on the same state, no blocking issue, the fast gate green
+    on it and the workflow rule met — on exactly that state, with the fast
+    gate's time limit, process-group stop, failure-line extraction, saved log
+    (`final-gate-<state>.log`) and gate-output learning. Green: consensus, and
+    the report says both gates passed on that state. Red or timed out: no
+    consensus, both sign-offs are cleared, both agents are shown its output
+    next turn, and the session goes on.
+  - Cached per state, so the same files are never final-gated twice in a
+    session; a failure gets the one flaky re-run. Never remembered across
+    sessions, never deferred.
+  - The workflow rules (`fix`/`add` replays, `build`'s red-before-code,
+    `refactor`'s green start) keep using the fast gate, so `add` needs a test
+    the fast gate runs.
+  - Saved with the session and kept by `duet resume`, settable as
+    `final_gate` in `.duet/config.json`, shown in the session header,
+    `duet status` and the report. Agents are told there are two gates and that
+    `run_gate` and `duet gate` run the fast one. Without `--final-gate`,
+    nothing changes — no new events, no new prompt text.
+
 ## 0.18.2
 
 - Codex can build Swift inside its sandbox, so it stops asking for the full gate
