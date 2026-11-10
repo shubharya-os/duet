@@ -99,3 +99,30 @@ def _own_codex_home(tmp_path_factory, monkeypatch):
     change what every Codex probe and turn in the suite reports.
     """
     monkeypatch.setenv("CODEX_HOME", str(tmp_path_factory.mktemp("codex-home")))
+
+
+@pytest.fixture(autouse=True)
+def _no_codex_help_probe(monkeypatch):
+    """A fake codex is not asked `exec --help` before its first turn.
+
+    duet asks a real codex once whether it takes `--add-dir`. The fakes in this
+    suite count the calls they get, and none of them is about that question;
+    left alone, every count would be one higher. The tests about --add-dir use
+    `codex_help_probe` below to put the real question back.
+
+    `raising=False`: the snapshot the harness replays the tests against has no
+    probe, and this must not error every test there at setup.
+    """
+    from duet.adapters import codex_cli
+    real = getattr(codex_cli, "supports_add_dir", None)
+    monkeypatch.setattr(codex_cli, "supports_add_dir", lambda *a, **k: False, raising=False)
+    yield real
+
+
+@pytest.fixture
+def codex_help_probe(_no_codex_help_probe, monkeypatch):
+    """The real `codex exec --help` probe, with nothing remembered from before."""
+    from duet.adapters import codex_cli
+    if _no_codex_help_probe is not None:
+        monkeypatch.setattr(codex_cli, "supports_add_dir", _no_codex_help_probe)
+        monkeypatch.setattr(codex_cli, "_ADD_DIR_SUPPORT", {})

@@ -403,6 +403,100 @@ def _when(epoch: Any) -> str:
         return "an unknown time"
 
 
+# -- building inside Codex's sandbox -------------------------------------------
+#
+# `--sandbox workspace-write` lets codex write the workspace and nothing else,
+# but compilers keep caches in the home directory. Swift was the case that cost
+# real sessions: clang's module cache is ~/.cache/clang/ModuleCache, so every
+# `swift build` failed "Operation not permitted", and the Codex side asked the
+# harness for a 30-minute gate on 17 of 29 turns just to learn whether its code
+# compiled. Those cache directories, and only those, are made writable.
+
+SWIFT_PACKAGE = "Package.swift"
+
+SWIFT_IN_SANDBOX = """
+- This workspace contains a Swift package. Inside your sandbox, run SwiftPM
+  with `--disable-sandbox` — `swift build --disable-sandbox`,
+  `swift test --disable-sandbox`, adding `--package-path <dir>` for a package
+  below the root — because SwiftPM's own sandbox cannot start inside Codex's.
+  That is the quick way to check that the code compiles before asking for the
+  full gate with `run_gate`."""
+
+# Keyed by the launch argv: one `codex exec --help` per codex, per process.
+_ADD_DIR_SUPPORT: Dict[Tuple[str, ...], bool] = {}
+
+
+def toolchain_cache_dirs() -> List[Path]:
+    """Cache directories outside the workspace that a build has to write.
+
+    clang's module cache, where LLVM puts it: $XDG_CACHE_HOME/clang/ModuleCache
+    (an absolute XDG_CACHE_HOME only, as the XDG spec says), else
+    ~/.cache/clang/ModuleCache; on Windows, %LOCALAPPDATA%\\clang\\ModuleCache.
+    """
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA", "")
+        return [Path(base) / "clang" / "ModuleCache"] if os.path.isabs(base) else []
+    xdg = os.environ.get("XDG_CACHE_HOME", "")
+    if os.path.isabs(xdg):
+        return [Path(xdg) / "clang" / "ModuleCache"]
+    home = os.path.expanduser("~")
+    if not os.path.isabs(home):          # no home directory to speak of
+        return []
+    return [Path(home) / ".cache" / "clang" / "ModuleCache"]
+
+
+def writable_cache_dirs() -> List[str]:
+    """toolchain_cache_dirs() that exist or could be created, as strings.
+
+    Never the home directory or anything above it, whatever the environment
+    says. A directory that cannot be made is left out, never an error: the
+    turn runs as it did before, without it.
+    """
+    home = Path(os.path.expanduser("~"))
+    dirs = []
+    for path in toolchain_cache_dirs():
+        try:
+            if path == home or path in home.parents:
+                continue
+            path.mkdir(parents=True, exist_ok=True)
+        except (OSError, ValueError):
+            continue
+        if path.is_dir():
+            dirs.append(str(path))
+    return dirs
+
+
+def supports_add_dir(launch: List[str], timeout: int = 30) -> bool:
+    """Whether this codex takes `exec --add-dir`; asked once and remembered.
+
+    Older codex releases refuse an option they do not know, and a refused
+    command line would cost the whole turn, so anything but a help text that
+    names the option counts as no.
+    """
+    key = tuple(launch)
+    if key not in _ADD_DIR_SUPPORT:
+        try:
+            proc = run_status_check(list(launch) + ["exec", "--help"], timeout,
+                                    env_with_sibling_path(launch[0]))
+            text = (proc.stdout or "") + (proc.stderr or "")
+            _ADD_DIR_SUPPORT[key] = proc.returncode == 0 and "--add-dir" in text
+        except (OSError, subprocess.SubprocessError):
+            _ADD_DIR_SUPPORT[key] = False
+    return _ADD_DIR_SUPPORT[key]
+
+
+def has_swift_package(root: str) -> bool:
+    """A Package.swift at the root or anywhere below it, outside skipped dirs."""
+    # Here, not at the top: duet.workspace imports duet.adapters, which imports
+    # this module, so a top-level import is a cycle when workspace loads first.
+    from duet.workspace import SKIP_DIRS
+    for dirpath, dirnames, filenames in os.walk(root):
+        if SWIFT_PACKAGE in filenames:
+            return True
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+    return False
+
+
 def read_login_status(binary, timeout: int = 45) -> Tuple[Optional[bool], str]:
     """(logged_in, human description). None means it could not be determined."""
     first = binary[0] if isinstance(binary, (list, tuple)) else binary
@@ -463,6 +557,11 @@ class CodexCliAdapter(Adapter):
         self.sandbox = "read-only"
         return "sandbox read-only"
 
+    def workspace_notes(self, root: str) -> str:
+        if self.sandbox == "workspace-write" and has_swift_package(root):
+            return SWIFT_IN_SANDBOX
+        return ""
+
     WEB_SEARCH = ["-c", "tools.web_search=true"]
 
     def allow_web(self) -> str:
@@ -483,6 +582,9 @@ class CodexCliAdapter(Adapter):
         ]
         if self.sandbox:
             cmd += ["--sandbox", self.sandbox]
+        if self.sandbox == "workspace-write" and supports_add_dir(self.launch):
+            for path in writable_cache_dirs():
+                cmd += ["--add-dir", path]
         if self.model:
             cmd += ["--model", self.model]
         return cmd + self.extra_args
