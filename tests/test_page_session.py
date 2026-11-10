@@ -61,7 +61,8 @@ def test_a_page_gate_also_lets_the_agents_take_the_screenshots(tmp_path):
 
     venv = ClaudeCodeAdapter(name="claude", cwd=str(tmp_path))
     venv.allow_gate("/venv/bin/python -m duet page check index.html")
-    assert venv.allowed_tools == ["Bash(/venv/bin/python:*)"]
+    # through the module, never the bare interpreter: `python -c` is not the gate
+    assert venv.allowed_tools == ["Bash(/venv/bin/python -m duet:*)"]
 
 
 # -- a website's gate --------------------------------------------------------

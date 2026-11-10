@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- The Bash rule Claude Code is granted for the gate no longer covers a whole
+  interpreter. It was `Bash(<first word>:*)` for each part of the gate, so a gate
+  `bash scripts/gate.sh` granted `Bash(bash:*)` and `/venv/bin/python -m pytest -q`
+  granted `Bash(/venv/bin/python:*)` — and with them `bash -c "<anything>"` and
+  `python -c "<anything>"`, far wider than the gate. For a shell or interpreter
+  (sh, bash, zsh, dash, ksh, fish, python and pythonN.N, pypy, node, ruby, perl,
+  php, deno, bun, bunx, npx, and `uv run` / `poetry run`, after stepping over
+  `env` and `VAR=value`) the rule now runs through the script, module or
+  subcommand: `Bash(bash scripts/gate.sh:*)`, `Bash(python -m pytest:*)`,
+  `Bash(npx vitest:*)`, `Bash(uv run pytest:*)`. Inline code (`bash -c`,
+  `python -c`, `node -e`, `deno eval`), or an interpreter option the rule cannot
+  read safely, grants nothing; the agent runs that gate with `duet gate`. Other
+  programs keep their rule (`Bash(make:*)`, `Bash(./scripts/gate.sh:*)`). The rule
+  keeps the gate's words as written, so a quoted Windows path keeps its quotes
+  and backslashes and matches the command the agent types.
+
 ## 0.18.0
 
 - Agents get a sanctioned way to run the gate: `duet gate`. Measured on 262 real

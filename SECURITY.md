@@ -39,6 +39,13 @@ hand; duet's contribution is that it stops being you doing the pasting.
   scoped to your gate's own commands, `duet gate` (which runs that same gate), and
   the read-only `cat`, `head`, `tail`, `grep`, `wc`, `ls` and `git status`. Not
   `git diff`, `git show` or `git log`, whose `--output=<file>` writes a file.
+  "The gate's own commands" means each part of the gate's program run the way
+  the gate runs it, and narrower variants of it: `make test` allows `make ...`,
+  but for a shell or interpreter the rule runs through the script or module —
+  `bash scripts/gate.sh` allows `bash scripts/gate.sh ...` and `python -m pytest
+  -q` allows `python -m pytest ...` — never the bare `bash` or `python`, which
+  would run any code at all. A part that is only inline code (`bash -c "..."`)
+  grants nothing; the agent runs it through `duet gate`.
 - `duet build` writes `.duet/gate_unittest.py` when your machine has no test
   runner. It is duet's own file, in duet's own directory, and it only discovers
   and runs test files under the workspace.
