@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- The opening gate remembers a failure as it already remembered a pass. Measured
+  on 0.15.0: the opening gate ran 257 times for 130.9 hours (31 minutes on
+  average); in 47 of those runs (30.4 hours) the same project had already run the
+  same gate command on the identical workspace digest within the previous 24
+  hours, 37 of them failing — and failures were never remembered, so every one
+  was re-run in full. Same key (root, digest, command), same 24 hours, same
+  `--fresh-gate`; time-outs, skipped and deferred results are never kept, and
+  the stored output is capped per entry. Agents and terminal are told "FAILED
+  (remembered from a run on these exact files <when>, <duration>; not re-run)".
+  It decides nothing: `Workflow.on_gate` never sees it, a rule that still needs
+  to see red itself (`fix` until reproduced) gets a real run, sign-offs are
+  counted against a real run only, and a failure that passes on its flaky
+  re-run is forgotten.
+- `duet status` no longer offers `duet resume <id>` for a dead session that
+  never saved state.json (it died before finishing a turn), which `duet resume`
+  then refused. Status, the recent-sessions list and resume's refusal now all
+  say there is nothing to resume and give the command to start it again: the
+  command line the session was started with (now recorded in `session_start`
+  as `started_with`), or for an older record `duet run` with its task, gate and
+  rounds. `duet status --json` has `"restart"` for it.
+- `duet wait [<id>] [--timeout MINUTES]`: blocks until a `--detach`ed session is
+  no longer running, then prints the same final summary `duet status <id>`
+  does; exits 0 on consensus, 1 on any other end (exhausted, blocked, error,
+  interrupted, dead), 2 on a timeout or no such session. It polls the event
+  log every few seconds rather than touching the session's process — until
+  now, anything that started a session with `--detach` had to grep its log to
+  know when it ended, and a grep for "ERROR" matches an agent's own message as
+  readily as the session actually failing. Run straight after `--detach`, it
+  waits for a session that has not written its first event yet (up to three
+  minutes of silence) instead of calling it missing or dead.
+
 - Agents can ask for the gate without ending the session: a CONTINUE with
   `"run_gate": true` (also `"gate"` or `"request_gate"`, and "yes"/"true") runs
   the gate on the state that turn left, shows the result to the next agent, and

@@ -27,6 +27,12 @@ Run `duet status` and report it in one short paragraph: is it still going, which
 who it is waiting on, what they are arguing about, and whether the gate is passing.
 Nothing else. Do not start a new session.
 
+If instead you need to block until a `--detach`ed session finishes — before reporting
+back, say — use `duet wait <id>` rather than polling `status` in a loop or tailing its
+log and grepping for "ERROR": an agent's own message can contain that word without the
+session having ended. `wait` exits 0 on consensus and nonzero otherwise, so its exit code
+alone tells you how it went.
+
 ## If the argument is `review`
 
 Run `duet review` to have the other model review the current diff. Report the
@@ -53,7 +59,9 @@ shell that started it — your own tool shell, a terminal someone closes — can
 before they finish. Without `--detach`, that kills the session with it, silently.
 `--detach` starts it as its own process and returns at once with a session id and a log
 path; poll progress with `duet status` (an id, or none for the newest) and `tail -f`
-the log if you want to watch it live.
+the log if you want to watch it live. To block until it is done instead, use
+`duet wait` — it watches the event log rather than grepping the log for "ERROR",
+which an agent's own message can contain without the session having ended.
 
 Both agents take turns in the workspace until they agree. It never ends on one agent's
 say-so: both must vote DONE on the same workspace state, with no blocking objection open

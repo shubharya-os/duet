@@ -200,9 +200,10 @@ class GateResult:
     timeout: int = 0
     # Seconds the run took, kept with a pass in .duet/gate-cache.json.
     duration: float = 0.0
-    # Set when this is a pass from an earlier session rather than a run made
-    # now: when it happened, in words. Only ever the opening check — see
-    # duet/gate_cache.py for why nothing is counted against it.
+    # Set when this is a result from an earlier session rather than a run made
+    # now — a pass or a failure: when it happened, in words. Only ever the
+    # opening check — see duet/gate_cache.py for why nothing is counted
+    # against it.
     remembered: str = ""
     # Set on a pass that came from re-running a failed gate over files nobody
     # had changed: the one-line warning that the earlier failure may have been
@@ -239,9 +240,15 @@ class GateResult:
             return "PASSED"
         if self.timed_out:
             return "TIMED OUT — " + self.timeout_note()
+        if self.remembered:
+            return "FAILED (%s)" % self.remembered_note()
         return "FAILED (exit %d)" % self.exit_code
 
     def remembered_note(self) -> str:
+        if not self.ok:
+            return ("remembered from a run on these exact files %s, %s; not re-run — "
+                    "exit %d; --fresh-gate to rerun"
+                    % (self.remembered, human_duration(self.duration), self.exit_code))
         return ("remembered from %s, same files, same command; --fresh-gate to rerun"
                 % self.remembered)
 

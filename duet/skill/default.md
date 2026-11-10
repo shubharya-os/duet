@@ -20,7 +20,9 @@ Always add `--detach`: a session runs for many minutes, and the shell you just r
 command in — your own tool shell — can be torn down (a cancelled turn, a closed terminal)
 long before the two agents finish, which otherwise kills the session with it and leaves
 no record of why. `--detach` returns at once with a session id and a log path; check on
-it with `{{DUET}} status` rather than waiting on the command.
+it with `{{DUET}} status` rather than waiting on the command. To block until it is done
+instead of polling, use `{{DUET}} wait` — it watches the event log, not the process, so
+it is never fooled by an agent's own message that happens to say "ERROR".
 
 **Do it directly, without duet,** for: questions and explanations; reading or exploring
 code; one-line and mechanical edits (typos, renames, formatting, config values); any

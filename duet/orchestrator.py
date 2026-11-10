@@ -457,6 +457,9 @@ class Orchestrator:
                             "ran out of time" if first.timed_out else "failed",
                             ": " + ", ".join(names) if names else ""))
                     self.emit("gate_flaky", digest=digest, note=again.flaky, tests=names)
+                    # The failure the first run left in .duet/gate-cache.json
+                    # may have been the machine: no session opens on it.
+                    gate_cache.forget(self.config.root, digest, again.command)
                 self._gate_cache[digest] = again
         return self._gate_cache[digest]
 
@@ -568,7 +571,7 @@ class Orchestrator:
         return self.deferred_gate(digest, "no turn has voted DONE on this state yet")
 
     def opening_gate(self, digest: str) -> GateResult:
-        """The gate before round 1: a pass remembered from another session, if any.
+        """The gate before round 1: a result remembered from another session, if any.
 
         Same digest, same command, under a day old, and not `--fresh-gate` —
         otherwise the gate runs as it always has. The remembered result is shown
@@ -580,13 +583,20 @@ class Orchestrator:
             return self.shown_gate(digest)
         if self.workspace.gate and not self.config.fresh_gate:
             remembered = gate_cache.recall(self.config.root, digest, self.workspace.gate)
+            # A remembered failure is only ever shown, never fed to a rule: a
+            # rule that still needs to see the gate for itself (`fix`, until it
+            # has seen red in this session) gets the real run instead.
+            if remembered is not None and not remembered.ok and self.workflow \
+                    and self.workflow.wants_every_gate(self.config.workflow_state):
+                remembered = None
             if remembered is not None:
                 self._remembered[digest] = remembered
                 self._last_run = (digest, remembered)
-                if self.workflow:
+                if self.workflow and remembered.ok:
                     self.workflow.on_gate(self.config.workflow_state, digest, True)
                 self.emit("gate_remembered", command=remembered.command, digest=digest,
-                          when=remembered.remembered, duration=remembered.duration)
+                          when=remembered.remembered, duration=remembered.duration,
+                          ok=remembered.ok, exit_code=remembered.exit_code)
                 return remembered
         return self.gate_for(digest)
 
@@ -1157,6 +1167,9 @@ class Orchestrator:
             # by path from an old virtualenv otherwise looks like any other.
             duet_version=__version__,
             python=sys.executable,
+            # How it was started, for `duet status` to offer again if it dies
+            # before saving anything a resume could carry on from.
+            started_with=cfg.started_with or None,
         )
         previous = self._install_stop_handlers()
         try:
@@ -1279,13 +1292,14 @@ class Orchestrator:
                     )
 
                 checked = record.gate or gate
-                if checked.deferred and any(s.digest == record.digest
-                                            for s in self.state.signoffs.values()):
+                if (checked.deferred or checked.remembered) and any(
+                        s.digest == record.digest for s in self.state.signoffs.values()):
                     # A sign-off on this state is about to be counted: it is
                     # counted against a real run on these exact files, never a
-                    # deferral.
+                    # deferral or a result remembered from another session.
                     checked = self.gate_for(record.digest)
-                decision = self.state.decide(record.digest, checked.ok and not checked.deferred,
+                decision = self.state.decide(record.digest, checked.ok and not checked.deferred
+                                             and not checked.remembered,
                                              cfg.on_blocked)
                 if decision.kind == "consensus" and (self.workflow or cfg.workflow_state.get("clean_room")):
                     # Both agents agree; the workflow's rule gets the last word,

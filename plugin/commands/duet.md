@@ -25,6 +25,12 @@ Run `duet status` and report it in one short paragraph: is it still going, which
 who it is waiting on, what they are arguing about, and whether the gate is passing.
 Nothing else. Do not start a new session.
 
+If instead you need to block until a `--detach`ed session finishes — before reporting
+back, say — use `duet wait <id>` rather than polling `status` in a loop or tailing its
+log and grepping for "ERROR": an agent's own message can contain that word without the
+session having ended. `wait` exits 0 on consensus and nonzero otherwise, so its exit code
+alone tells you how it went.
+
 ## If the argument is `review`
 
 Run `duet review` to have the other model review the current diff. Report the
@@ -66,7 +72,9 @@ duet run "$ARGUMENTS" --context-file /tmp/duet-context.md --detach
 
 Poll it with `duet status <id>` every so often (it also takes no id, for the newest
 session) until it reports consensus or a problem. `tail -f` the printed log if you want
-to watch it live while you wait.
+to watch it live while you wait. Or just run `duet wait <id>`, which blocks until it
+is done and exits 0 on consensus — it watches the event log, not the log text, so an
+agent's own message containing "ERROR" never passes for the session having ended.
 
 If the workspace is empty — no source, no tests, nothing to detect — use `build`
 instead. It sets the gate before any code exists, so it starts red, and orders the work:

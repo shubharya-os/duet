@@ -139,13 +139,22 @@ def test_the_api_backend_reports_a_server_error_honestly(tmp_path, fake_api, mon
     start, _ = fake_api
 
     class Failing(BaseHTTPRequestHandler):
-        def do_GET(self):
+        # Read the request before answering: on Windows, closing a socket with
+        # unread data in it sends a reset, and the client saw "connection
+        # aborted" (WinError 10053) instead of the 500 this test is about.
+        def _fail(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            if length:
+                self.rfile.read(length)
             self.send_response(500)
+            self.send_header("Content-Length", "0")
             self.end_headers()
 
+        def do_GET(self):
+            self._fail()
+
         def do_POST(self):
-            self.send_response(500)
-            self.end_headers()
+            self._fail()
 
         def log_message(self, *args):
             pass

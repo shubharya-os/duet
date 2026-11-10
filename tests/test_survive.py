@@ -174,6 +174,9 @@ def test_status_tells_running_finished_and_dead_apart(tmp_path, capsys):
     write_session(tmp_path, "20261011-100002-gone", [
         dict(start, t=now - 30, pid=gone_pid()),
         {"kind": "turn_start", "t": now - 20, "round": 3, "agent": "b"}])
+    # It saved after rounds 1 and 2, so there is something to resume.
+    (tmp_path / ".duet" / "sessions" / "20261011-100002-gone" / "state.json").write_text(
+        "{}", encoding="utf-8")
     # From before pids were recorded: judged by a silence no limit allows.
     write_session(tmp_path, "20261011-100003-old", [
         dict(start, t=now - 9000),
@@ -202,6 +205,8 @@ def test_status_with_no_session_lists_recent_ones_and_names_the_dead(tmp_path, c
     write_session(tmp_path, "20261011-090000-gone", [
         dict(start, t=now - 30, pid=gone_pid()),
         {"kind": "turn_start", "t": now - 20, "round": 2, "agent": "a"}])
+    (tmp_path / ".duet" / "sessions" / "20261011-090000-gone" / "state.json").write_text(
+        "{}", encoding="utf-8")
     write_session(tmp_path, "20261011-090001-done", [
         dict(start, t=now - 30),
         {"kind": "session_end", "t": now - 5, "status": "consensus", "reason": "agreed"}])
@@ -211,6 +216,61 @@ def test_status_with_no_session_lists_recent_ones_and_names_the_dead(tmp_path, c
     assert "20261011-090000-gone" in out and "20261011-090001-done" in out
     assert "stopped without finishing (process gone)" in out
     assert "duet resume 20261011-090000-gone" in out
+
+
+def test_a_dead_session_that_saved_no_state_is_offered_a_restart_not_a_resume(tmp_path, capsys):
+    """`duet resume` refuses a session with no state.json; status must not offer it."""
+    now = time.time()
+    start = {"kind": "session_start", "task": "fix the parser", "max_rounds": 6,
+             "agents": {"a": "A"}, "gate": "pytest -q",
+             "started_with": ["fix", "the parser", "--gate", "pytest -q", "--rounds", "6"]}
+    write_session(tmp_path, "20261011-110000-gone", [
+        dict(start, t=now - 30, pid=gone_pid()),
+        {"kind": "turn_start", "t": now - 20, "round": 1, "agent": "a"}])
+
+    gone = status_json(tmp_path, capsys, "20261011-110000-gone")
+    assert gone["state"] == "dead"
+    assert gone["resume"] is None
+    assert gone["restart"].startswith("duet fix 'the parser' --gate 'pytest -q' --rounds 6")
+
+    main(["status", "20261011-110000-gone", "-C", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "duet resume" not in out
+    assert "nothing to resume" in out
+    assert "start it again with: duet fix 'the parser'" in out
+
+    # And `duet resume` names the same command when it refuses.
+    assert main(["resume", "20261011-110000-gone", "-C", str(tmp_path)]) != 0
+    assert "duet fix 'the parser' --gate 'pytest -q' --rounds 6" in capsys.readouterr().out
+
+
+def test_the_recent_list_offers_a_restart_for_a_dead_session_with_no_state(tmp_path, capsys):
+    now = time.time()
+    # From before the command line was recorded: rebuilt from the task, gate and rounds.
+    start = {"kind": "session_start", "task": "say hi", "max_rounds": 4,
+             "agents": {"a": "A"}, "gate": "make test"}
+    write_session(tmp_path, "20261011-120000-gone", [
+        dict(start, t=now - 30, pid=gone_pid()),
+        {"kind": "turn_start", "t": now - 20, "round": 1, "agent": "a"}])
+    write_session(tmp_path, "20261011-120001-done", [
+        dict(start, t=now - 30),
+        {"kind": "session_end", "t": now - 5, "status": "consensus", "reason": "agreed"}])
+
+    main(["status", "-C", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "duet resume 20261011-120000-gone" not in out
+    assert "duet run 'say hi' --gate 'make test' --rounds 4" in out
+
+
+def test_a_session_records_the_command_line_it_was_started_with(tmp_path, capsys):
+    main(["run", "say hi", "-C", str(tmp_path), "--pair", "mock+mock", "--rounds", "1",
+          "--no-gate", "--allow-nested"])
+    capsys.readouterr()
+    [session] = [p for p in (tmp_path / ".duet" / "sessions").iterdir() if p.is_dir()]
+    start = json.loads((session / "events.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert start["kind"] == "session_start"
+    assert start["started_with"] == ["run", "say hi", "-C", str(tmp_path), "--pair", "mock+mock",
+                                     "--rounds", "1", "--no-gate", "--allow-nested"]
 
 
 # -- duet --detach -----------------------------------------------------------
@@ -329,3 +389,190 @@ def test_the_detached_id_is_used_once_and_not_inherited(tmp_path, monkeypatch):
     assert first.session_id == "20261011-130000-once"
     assert "DUET_FORCE_SESSION_ID" not in os.environ
     assert Orchestrator(cfg).session_id != first.session_id
+
+
+# -- duet wait ----------------------------------------------------------------
+# `duet wait` blocks on the same classification `duet status` reads from the
+# event log — never the process, never the raw log text — then prints that
+# same final summary. These sessions are written finished or dead outright
+# (no real waiting needed) except where a test is specifically about the
+# polling loop itself.
+
+def test_wait_exits_0_on_consensus(tmp_path, capsys):
+    now = time.time()
+    start = {"kind": "session_start", "task": "say hi", "max_rounds": 2, "agents": {"a": "A"}}
+    write_session(tmp_path, "20261011-170000-done", [
+        dict(start, t=now - 30),
+        {"kind": "session_end", "t": now - 5, "status": "consensus", "reason": "agreed"}])
+
+    code = main(["wait", "20261011-170000-done", "-C", str(tmp_path)])
+    assert code == 0
+    assert "finished" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("status", ["exhausted", "blocked", "error", "interrupted"])
+def test_wait_exits_1_on_any_other_end(tmp_path, capsys, status):
+    now = time.time()
+    start = {"kind": "session_start", "task": "say hi", "max_rounds": 2, "agents": {"a": "A"}}
+    name = "20261011-170001-" + status
+    write_session(tmp_path, name, [
+        dict(start, t=now - 30),
+        {"kind": "session_end", "t": now - 5, "status": status, "reason": "see report"}])
+
+    code = main(["wait", name, "-C", str(tmp_path)])
+    assert code == 1
+    assert status in capsys.readouterr().out
+
+
+def test_wait_detects_a_dead_session(tmp_path, capsys):
+    now = time.time()
+    start = {"kind": "session_start", "task": "t", "max_rounds": 6, "agents": {"a": "A"}}
+    name = "20261011-170002-gone"
+    write_session(tmp_path, name, [
+        dict(start, t=now - 30, pid=gone_pid()),
+        {"kind": "turn_start", "t": now - 20, "round": 3, "agent": "a"}])
+
+    code = main(["wait", name, "-C", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "stopped without finishing (process gone)" in out
+
+
+def test_wait_times_out_while_the_session_is_still_running(tmp_path, capsys):
+    now = time.time()
+    start = {"kind": "session_start", "task": "t", "max_rounds": 6, "agents": {"a": "A"},
+             "turn_timeout": {"a": 1800}, "gate_timeout": 900, "pid": os.getpid()}
+    name = "20261011-170003-live"
+    write_session(tmp_path, name, [
+        dict(start, t=now),
+        {"kind": "turn_start", "t": now, "round": 1, "agent": "a"}])
+
+    started = time.monotonic()
+    code = main(["wait", name, "-C", str(tmp_path), "--timeout", "0.01"])
+    took = time.monotonic() - started
+    out = capsys.readouterr().out
+    assert code == 2
+    assert "timed out" in out
+    assert took < 10, "the timeout itself should be fast, not a long sleep"
+
+
+def test_wait_is_not_fooled_by_an_agent_message_containing_error(tmp_path, capsys):
+    """A plain `tail -f | grep ERROR` would quit on this line; `duet wait` reads
+    the event log's own kinds, never the raw log text, so it keeps waiting."""
+    now = time.time()
+    start = {"kind": "session_start", "task": "t", "max_rounds": 6, "agents": {"a": "A"},
+             "turn_timeout": {"a": 1800}, "gate_timeout": 900, "pid": os.getpid()}
+    name = "20261011-170004-live"
+    write_session(tmp_path, name, [
+        dict(start, t=now),
+        {"kind": "turn_start", "t": now, "round": 1, "agent": "a"}])
+    (tmp_path / ".duet" / "sessions" / (name + ".log")).write_text(
+        "a: I checked the stack trace — it says ERROR: connection refused, but that's "
+        "expected here and not the session ending.\n", encoding="utf-8")
+
+    started = time.monotonic()
+    code = main(["wait", name, "-C", str(tmp_path), "--timeout", "0.01"])
+    took = time.monotonic() - started
+    out = capsys.readouterr().out
+    assert code == 2 and "timed out" in out, "the ERROR line in the log ended the wait early"
+    assert took >= 0.3, "returned before the timeout — the ERROR line was mistaken for the end"
+
+
+def test_wait_prints_the_same_summary_duet_status_would(tmp_path, capsys):
+    now = time.time()
+    start = {"kind": "session_start", "task": "say hi", "max_rounds": 2, "agents": {"a": "A"}}
+    name = "20261011-170005-done"
+    write_session(tmp_path, name, [
+        dict(start, t=now - 30),
+        {"kind": "session_end", "t": now - 5, "status": "consensus", "reason": "agreed"}])
+
+    assert main(["wait", name, "-C", str(tmp_path)]) == 0
+    wait_out = capsys.readouterr().out
+    assert main(["status", name, "-C", str(tmp_path)]) == 0
+    status_out = capsys.readouterr().out
+    assert wait_out == status_out
+
+
+def test_wait_defaults_to_the_newest_session(tmp_path, capsys):
+    now = time.time()
+    start = {"kind": "session_start", "task": "say hi", "max_rounds": 2, "agents": {"a": "A"}}
+    write_session(tmp_path, "20261011-170006-first", [
+        dict(start, t=now - 90),
+        {"kind": "session_end", "t": now - 60, "status": "consensus", "reason": "agreed"}])
+    write_session(tmp_path, "20261011-170007-second", [
+        dict(start, t=now - 30),
+        {"kind": "session_end", "t": now - 5, "status": "blocked", "reason": "see report"}])
+
+    code = main(["wait", "-C", str(tmp_path)])
+    assert code == 1
+    assert "20261011-170007-second" in capsys.readouterr().out
+
+
+def _finish_on_first_poll(monkeypatch, tmp_path, name, before=None):
+    """A WAIT_POLL that, the first time `duet wait` sleeps, lets the detached
+    child get as far as finishing — the way a real one would while it waited."""
+    import duet.cli as cli
+
+    def poll(seconds):
+        if before:
+            before()
+        session = tmp_path / ".duet" / "sessions" / name
+        session.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        (session / "events.jsonl").write_text("\n".join(json.dumps(e) for e in [
+            {"kind": "session_start", "t": now - 1, "task": "say hi", "max_rounds": 2,
+             "agents": {"a": "A"}},
+            {"kind": "session_end", "t": now, "status": "consensus", "reason": "agreed"},
+        ]) + "\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "WAIT_POLL", poll)
+
+
+def test_wait_right_after_detach_waits_for_the_session_to_start(tmp_path, capsys, monkeypatch):
+    """--detach prints the id before its child has written anything but the
+    log; the next command the skill runs is `duet wait <id>`. That is a session
+    starting, not "no such session"."""
+    name = "20261011-170008-starting"
+    sessions = tmp_path / ".duet" / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / (name + ".log")).write_text("", encoding="utf-8")
+    _finish_on_first_poll(monkeypatch, tmp_path, name)
+
+    assert main(["wait", name, "-C", str(tmp_path)]) == 0
+    assert "finished" in capsys.readouterr().out
+
+
+def test_wait_on_a_session_with_no_events_yet_is_not_called_dead(tmp_path, capsys, monkeypatch):
+    """An empty event log has no pid and its silence counts from 1970, which
+    `classify_session` calls dead; a session directory made a moment ago is
+    a session that has not written its first event yet."""
+    name = "20261011-170009-starting"
+    session = tmp_path / ".duet" / "sessions" / name
+    session.mkdir(parents=True)
+    (session / "events.jsonl").write_text("", encoding="utf-8")
+    _finish_on_first_poll(monkeypatch, tmp_path, name)
+
+    assert main(["wait", name, "-C", str(tmp_path)]) == 0
+
+
+def test_wait_on_a_detach_that_stopped_before_starting_says_why(tmp_path, capsys):
+    name = "20261011-170010-never"
+    sessions = tmp_path / ".duet" / "sessions"
+    sessions.mkdir(parents=True)
+    log = sessions / (name + ".log")
+    log.write_text("✗ not signed in to codex\n", encoding="utf-8")
+    old = time.time() - 3600
+    os.utime(log, (old, old))
+
+    assert main(["wait", name, "-C", str(tmp_path)]) == 2
+    out = capsys.readouterr().out
+    assert "not signed in to codex" in out
+
+
+def test_wait_exits_2_for_no_such_session(tmp_path, capsys):
+    assert main(["wait", "no-such-id", "-C", str(tmp_path)]) == 2
+    assert "no-such-id" in capsys.readouterr().out
+
+
+def test_wait_exits_2_when_there_are_no_sessions_at_all(tmp_path, capsys):
+    assert main(["wait", "-C", str(tmp_path)]) == 2
+    assert "no sessions" in capsys.readouterr().out

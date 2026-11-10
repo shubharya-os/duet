@@ -96,16 +96,22 @@ def test_a_passing_gate_is_stored_with_digest_command_time_duration_and_output(t
     assert "output" in entry
 
 
-def test_a_failing_or_timed_out_gate_is_never_stored(tmp_path):
-    ws, log = workspace(tmp_path), tmp_path / "runs.log"
-    session(ws, counting_gate(log, code=1), [WAIT], [WAIT], max_rounds=2)
-    assert not (ws / ".duet" / "gate-cache.json").exists()
-
+def test_a_timed_out_skipped_or_deferred_gate_is_never_stored(tmp_path):
+    ws = workspace(tmp_path)
     timed_out = GateResult(command="pytest", ok=False, exit_code=124, output="",
                            timed_out=True, timeout=5)
     gate_cache.remember(str(ws), "abc", timed_out)
-    failed = GateResult(command="pytest", ok=False, exit_code=1, output="1 failed")
-    gate_cache.remember(str(ws), "abc", failed)
+    gate_cache.remember(str(ws), "abc", GateResult(command="pytest", ok=True, exit_code=0,
+                                                   output="", skipped=True))
+    gate_cache.remember(str(ws), "abc", GateResult.deferral("pytest", "the last turn said CONTINUE"))
+    assert not (ws / ".duet" / "gate-cache.json").exists()
+    assert gate_cache.recall(str(ws), "abc", "pytest") is None
+
+
+def test_a_session_whose_gate_times_out_stores_nothing(tmp_path):
+    ws = workspace(tmp_path)
+    slow = "%s -c \"import time; time.sleep(30)\"" % sys.executable
+    session(ws, slow, [WAIT], [WAIT], max_rounds=1, gate_timeout=1)
     assert not (ws / ".duet" / "gate-cache.json").exists()
 
 
@@ -177,12 +183,14 @@ def test_a_pass_older_than_a_day_is_not_reused(tmp_path):
     assert "gate_start" in before_first_turn(result)
 
 
-def test_a_stored_failure_is_never_reused(tmp_path):
+def test_a_failure_from_before_failures_were_kept_is_not_reused(tmp_path):
+    """An entry with ok false and no exit code is not one this version wrote."""
     ws, log = workspace(tmp_path), tmp_path / "runs.log"
     gate = counting_gate(log)
     session(ws, gate, [DONE], [DONE])
     entries = cache_entries(ws)
     entries[0]["ok"] = False
+    del entries[0]["exit_code"]
     (ws / ".duet" / "gate-cache.json").write_text(json.dumps({"version": 1, "entries": entries}), encoding="utf-8")
 
     _, result, _ = session(ws, gate, [DONE], [DONE])
