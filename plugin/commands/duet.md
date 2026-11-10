@@ -1,7 +1,7 @@
 ---
 description: Hand this to Claude Code and ChatGPT together — they build it and check each other until both sign off
 argument-hint: <what you want built> | running | review
-allowed-tools: Bash(command -v duet), Bash(duet:*), Bash(git:*), Bash(ls:*), Bash(cat:*), Read, Write
+allowed-tools: Bash(command -v duet), Bash(duet:*), Bash(git:*), Bash(ls:*), Bash(cat:*), Read
 ---
 
 The user typed `/duet $ARGUMENTS`.
