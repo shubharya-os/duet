@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.18.2
 
 - Codex can build Swift inside its sandbox, so it stops asking for the full gate
   just to learn whether its code compiles. In real Swift/iOS sessions on duet
