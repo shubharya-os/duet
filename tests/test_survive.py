@@ -136,7 +136,10 @@ def test_a_signal_while_the_gate_runs_stops_the_gate_too(tmp_path):
 
 def test_a_second_signal_during_shutdown_exits_at_once(tmp_path):
     proc, took = run_child(tmp_path, "turn", second=True)
-    assert took < 15, "the second signal waited for the shutdown"
+    # The shutdown it must not wait for takes 30 s; 25 s still tells the two
+    # apart, and leaves room for a fresh interpreter to start on a loaded
+    # machine (21 s was measured at load 600).
+    assert took < 25, "the second signal waited for the shutdown"
     assert proc.returncode == 128 + signal.SIGTERM, (proc.returncode, proc.stderr)
     assert "stopping: SIGTERM" in proc.stdout       # the first one began a shutdown
     assert "session_end" not in [e["kind"] for e in events_of(tmp_path)]
