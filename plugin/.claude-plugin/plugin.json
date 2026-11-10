@@ -18,5 +18,9 @@
     "workflow",
     "multi-agent",
     "consensus"
-  ]
+  ],
+  "documentationUrl": "https://github.com/shubharya-os/duet#readme",
+  "supportUrl": "https://github.com/shubharya-os/duet/issues",
+  "privacyPolicyUrl": "https://github.com/shubharya-os/duet/blob/main/docs/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/shubharya-os/duet/blob/main/LICENSE"
 }
