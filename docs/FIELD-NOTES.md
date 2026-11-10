@@ -64,7 +64,7 @@ On 0.15, 67 of 242 sessions (28%) ended BLOCKED. Reading the final messages, 24 
 votes were not real blockers. They were requests for a gate run, because the gate now
 ran only after DONE or BLOCKED. In iOS projects the agents may not run `xcodebuild`
 themselves, so the gate is their only compile check. One wrote: *"I couldn't run swift
-test, swift build or fastgate.sh. I'm voting BLOCKED so the harness runs the gate on this
+test, swift build or [the gate script]. I'm voting BLOCKED so the harness runs the gate on this
 state: it is our only compile check."* BLOCKED stops the session, so a 0.15 saving
 quietly turned into lost sessions.
 
