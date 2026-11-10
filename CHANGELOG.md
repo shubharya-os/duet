@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.16.0
 
 - The opening gate remembers a failure as it already remembered a pass. Measured
   on 0.15.0: the opening gate ran 257 times for 130.9 hours (31 minutes on
