@@ -341,6 +341,13 @@ class Adapter:
         """
         return ""
 
+    def workspace_notes(self, root: str) -> str:
+        """What this backend's agent needs told about working in `root` with
+        its own tools, beyond what every agent is told; "" for nothing. Added
+        to its system prompt each turn, so a file that appears mid-session
+        counts from the next turn."""
+        return ""
+
     @classmethod
     def probe(cls, config: Optional[Dict[str, Any]] = None) -> Probe:
         return Probe(ok=False, detail="no probe implemented for %s" % cls.backend)

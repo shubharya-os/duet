@@ -865,6 +865,7 @@ class Orchestrator:
             root=self.config.root,
             edits_workspace=adapter.edits_workspace,
             gate_command=self.agent_gate_command,
+            notes=adapter.workspace_notes(self.config.root),
         )
 
     def _note_model_fallback(self, agent: str, round_no: int, reply: Any) -> None:

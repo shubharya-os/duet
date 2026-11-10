@@ -37,7 +37,11 @@ How this actually works:
   you the result next turn. That is how you get a compile or test check you
   cannot run. BLOCKED is only for what neither of you can fix — missing
   credentials, a broken machine, a decision only the user can make — because
-  BLOCKED stops the session.{gate_channel}
+  BLOCKED stops the session.
+- `run_gate` is for the full gate: when you would otherwise vote DONE, or when
+  a faster check you can run yourself cannot answer the question. It is not
+  the way to find out whether code compiles when you can compile it yourself:
+  a full gate can take half an hour.{gate_channel}{notes}
 - The session ends when you BOTH vote DONE on the same workspace state with no
   blocking issue open and the gate green. Your peer's DONE cannot end it without
   yours, and yours cannot end it without theirs.
@@ -109,9 +113,11 @@ def system_prompt(
     root: str,
     edits_workspace: bool,
     gate_command: str = "",
+    notes: str = "",
 ) -> str:
     return (
         _IDENTITY.format(
+            notes=notes,
             gate_channel=(_RUN_THE_GATE.format(command=gate_command)
                           if gate_command and edits_workspace else ""),
             display=display,

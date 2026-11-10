@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+- Codex can build Swift inside its sandbox, so it stops asking for the full gate
+  just to learn whether its code compiles. In real Swift/iOS sessions on duet
+  0.17.0 (gate `bash scripts/gate.sh`, about 30 minutes a run) the Codex side
+  asked for `run_gate` on 17 of 29 turns across two sessions, and the gate took
+  87% and 76% of the wall time; one session ran 7 hours. Codex said why: "Swift
+  was blocked by the sandbox while creating its module cache". Under
+  `codex exec --sandbox workspace-write`, `swift build` could not write clang's
+  module cache (~/.cache/clang/ModuleCache, "Operation not permitted"), and with
+  that writable SwiftPM still failed starting its own sandbox inside Codex's
+  ("sandbox_apply: Operation not permitted"). Now:
+  - With a writable sandbox, duet passes `--add-dir` for clang's module cache
+    ($XDG_CACHE_HOME/clang/ModuleCache, else ~/.cache/clang/ModuleCache;
+    %LOCALAPPDATA%\clang\ModuleCache on Windows), creating it if missing —
+    never the home directory or anything above it, never for a read-only
+    (review) sandbox, and only when `codex exec --help` lists `--add-dir`
+    (asked once per codex). A directory that cannot be made is left out, not
+    an error.
+  - When the workspace contains a Package.swift (at the root or nested, outside
+    skipped directories), the Codex agent is told to run SwiftPM with
+    `--disable-sandbox` (`swift build --disable-sandbox`,
+    `swift test --disable-sandbox`, `--package-path` as needed) as the quick
+    compile check before asking for `run_gate`. Claude Code agents are not.
+  - Every agent is told `run_gate` is for the full gate — when it would
+    otherwise vote DONE, or when no faster check it can run itself answers the
+    question — not a way to find out whether code compiles.
+
 ## 0.18.1
 
 - The Bash rule Claude Code is granted for the gate no longer covers a whole
