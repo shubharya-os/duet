@@ -758,6 +758,20 @@ Four conditions. All enforced by the harness. None negotiable by an agent.
 4. **Your tests pass**, run by the harness on the real files. Neither agent is ever
    *asked* whether they passed.
 
+The state id leaves out what the gate itself writes. Around every gate run the
+harness compares a per-file manifest of the workspace, and a path the gate created,
+changed or deleted becomes a *gate output* for the rest of the session — a whole
+directory the gate created is one entry — so a build writing into a custom output
+directory, or a generator rewriting an untracked project file, no longer moves the
+state on every run and makes agreement impossible. On 431 real sessions, the 94 whose gate wrote into the
+workspace reached consensus 33% of the time against 53%, and ran out of rounds 17%
+of the time against 4%. Gate outputs are named once in the terminal, in the
+report, and to both agents, and they are saved with the session for `duet resume`.
+An agent's work is never hidden this way: a path any turn has changed is never a
+gate output, and one that already was stops being one the moment a turn touches
+it; in a git repository no tracked file is ever one (a formatter rewriting source
+still moves the state, and is still warned about); and test files never are.
+
 ### Once one has signed, the other agrees without editing
 
 Condition 2 cuts both ways: any edit after a DONE voids it, so a pair that keeps

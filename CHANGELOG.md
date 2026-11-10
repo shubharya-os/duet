@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- A gate that writes into the workspace no longer keeps two agents from ever
+  agreeing. Measured on 431 sessions: in 94 (22%) the gate changed the
+  workspace when it ran; those reached consensus 33% of the time against 53%
+  for the rest, and ran out of rounds 17% of the time against 4%. One session
+  ran ten turns with both agents voting DONE on every turn after the first,
+  because `swift test --scratch-path build/AppCore`, `xcodegen generate`
+  and `xcodebuild -derivedDataPath build/DerivedData` moved the state id on
+  every run. 0.16's list of build directory names cannot cover a custom output
+  path or a project that is not a git repository, so the harness now learns
+  the outputs from the gate: around every run it compares per-file manifests,
+  and what the gate created, changed or deleted is left out of the state id
+  (and so of sign-offs) for the rest of the session — a directory the gate
+  created whole as one entry. Reported once as a `gate_outputs` event, a
+  terminal line, a line in the report and a line in both agents' prompts, and
+  saved for `duet resume`. Never a path an agent's turn changed (an edit to a
+  gate output makes it part of the state again, with a `gate_outputs_returned`
+  event), never a git-tracked file (a formatter still moves the state and is
+  still warned about, `gate_mutates` now naming the files), never a test file.
+
 ## 0.16.0
 
 - The opening gate remembers a failure as it already remembered a pass. Measured

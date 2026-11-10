@@ -30,7 +30,11 @@ from duet.adapters.base import (
 from duet.config import AgentSpec, Config
 from duet.consensus import DebateState, Decision
 from duet.protocol import BLOCKING_SEVERITIES, Envelope, Issue, parse_envelope
-from duet.workspace import GateResult, Workspace, failing_tests
+from duet.workspace import GateResult, Workspace, changed_paths, collapse_outputs, failing_tests
+
+# How many gate-output paths an event, a prompt or the report names before it
+# says "and N more".
+GATE_OUTPUTS_SHOWN = 20
 
 Reporter = Callable[[Dict[str, Any]], None]
 
@@ -341,8 +345,15 @@ class Orchestrator:
         # from _gate_cache: nothing is ever counted against a deferral.
         self._deferred: Dict[str, GateResult] = {}
         self._last_run: Optional[Tuple[str, GateResult]] = None
-        # One warning per session is enough; see _check_gate_is_read_only.
+        # One warning per session is enough; see _check_gate_is_read_only. The
+        # second flag is for the warning that matters — a gate rewriting files
+        # that stay in the signed state — if the first run only wrote outputs.
         self._gate_mutation_warned = False
+        self._gate_moved_warned = False
+        # Every path an agent's turn has changed this session. None of them may
+        # ever become a gate output: an agent's work is never hidden from a
+        # sign-off. (The outputs themselves live on self.workspace.gate_outputs.)
+        self.agent_changed: Set[str] = set()
         # The rule this session is held to, if any, beyond the double sign-off.
         self.workflow = workflows.get(config.workflow)
         self.adapters: Dict[str, Adapter] = adapters or {}
@@ -464,7 +475,9 @@ class Orchestrator:
         return self._gate_cache[digest]
 
     def _run_gate(self, digest: str, remember: bool = True) -> GateResult:
+        manifest = None
         if self.workspace.gate:
+            manifest = self.workspace.fingerprint(include_gate_outputs=True)
             self.emit("gate_start", command=self.workspace.gate, digest=digest)
         result = self.workspace.run_gate()
         if self.workspace.gate:
@@ -479,7 +492,7 @@ class Orchestrator:
             self._last_run = (digest, result)
             self.emit("gate_done", ok=result.ok, exit_code=result.exit_code, digest=digest,
                       timed_out=result.timed_out, timeout=result.timeout)
-            self._check_gate_is_read_only(digest)
+            self._check_gate_is_read_only(digest, manifest or {})
         return result
 
     def _save_gate_log(self, digest: str, result: GateResult) -> None:
@@ -611,7 +624,7 @@ class Orchestrator:
             return self._deferred[digest]
         return self.gate_for(digest)
 
-    def _check_gate_is_read_only(self, before: str) -> None:
+    def _check_gate_is_read_only(self, before: str, manifest: Dict[str, str]) -> None:
         """Say so if running the gate changes the workspace.
 
         Sign-offs are counted against a digest of the files, and the digest is
@@ -621,14 +634,76 @@ class Orchestrator:
         sign-off the moment it is checked, and the pair can agree forever
         without ever agreeing on the same bytes. Worth one warning rather than
         a session nobody can explain.
+
+        Measured on 431 sessions, 94 had a gate like that, and they reached
+        consensus 33% of the time against 53%. So the two manifests are
+        compared file by file, and what the gate wrote becomes a gate output
+        (see _learn_gate_outputs) instead of moving the state id. The warning
+        stays for what the gate changed that could not be left out.
         """
-        if self._gate_mutation_warned:
+        after = self.workspace.fingerprint(include_gate_outputs=True)
+        changed = changed_paths(manifest, after)
+        if not changed:
             return
-        after = self.workspace.digest()
-        if after == before:
+        self._learn_gate_outputs(changed, manifest, after)
+        moved = [p for p in changed if not self.workspace.is_gate_output(p)]
+        if self._gate_mutation_warned and (self._gate_moved_warned or not moved):
             return
         self._gate_mutation_warned = True
-        self.emit("gate_mutates", before=before, after=after)
+        self._gate_moved_warned = self._gate_moved_warned or bool(moved)
+        self.emit("gate_mutates", before=before, after=self.workspace.digest(),
+                  moved=moved[:GATE_OUTPUTS_SHOWN], moved_count=len(moved))
+
+    def _learn_gate_outputs(self, changed: List[str], before: Dict[str, str],
+                            after: Dict[str, str]) -> None:
+        """Leave what the gate itself wrote out of the signed state.
+
+        Not everything it changed: an agent's work must never be hidden from a
+        sign-off. So never a path an agent changed this session, never a file
+        git tracks (a formatter rewriting source has to keep moving the state,
+        and keeps the warning), and never a test file (the workflow rules
+        count them). A directory the gate created whole is one entry.
+        """
+        tracked = self.workspace.git_tracked()
+        claimable = [p for p in changed
+                     if not self.workspace.is_gate_output(p)
+                     and p not in self.agent_changed
+                     and p not in tracked
+                     and not workflows._is_test(Path(p))]
+        if not claimable:
+            return
+        added = collapse_outputs(claimable, before, after)
+        self.workspace.gate_outputs.update(added)
+        self.emit("gate_outputs", paths=added[:GATE_OUTPUTS_SHOWN], count=len(added),
+                  files=len(claimable))
+
+    def _note_agent_changes(self, agent: str, round_no: int,
+                            manifest: Optional[Dict[str, str]]) -> None:
+        """Remember what this turn changed, and give back any gate output it
+        touched: from now on that path is the agent's, and part of the state."""
+        if manifest is None:
+            return
+        changed = changed_paths(manifest, self.workspace.fingerprint(include_gate_outputs=True))
+        if not changed:
+            return
+        self.agent_changed.update(changed)
+        returned = sorted(out for out in self.workspace.gate_outputs
+                          if any(p == out or p.startswith(out + "/") for p in changed))
+        if returned:
+            self.workspace.gate_outputs.difference_update(returned)
+            self.emit("gate_outputs_returned", round=round_no, agent=agent,
+                      paths=returned[:GATE_OUTPUTS_SHOWN], count=len(returned))
+
+    def gate_outputs_line(self) -> str:
+        """One line naming the gate's outputs, for the agents and the report."""
+        outputs = sorted(self.workspace.gate_outputs)
+        if not outputs:
+            return ""
+        shown = ", ".join(outputs[:GATE_OUTPUTS_SHOWN])
+        if len(outputs) > GATE_OUTPUTS_SHOWN:
+            shown += " and %d more" % (len(outputs) - GATE_OUTPUTS_SHOWN)
+        return ("These paths are written by the gate and are not part of the signed state: %s. "
+                "Edit one and it is part of the state again." % shown)
 
     # -- one turn ---------------------------------------------------------
     def _build_prompt(self, agent: str, round_no: int, directive: str, digest: str) -> str:
@@ -663,6 +738,7 @@ class Orchestrator:
             peer_refused=self.pending_refused.pop(agent, None),
             turn_timeout=self.turn_budget(agent),
             restarted=self.pending_restarted.pop(agent, ""),
+            gate_outputs=self.gate_outputs_line(),
         )
 
     def _system_prompt(self, agent: str, round_no: int) -> str:
@@ -745,6 +821,9 @@ class Orchestrator:
         signed_before = (self.workspace.fingerprint()
                          if ingest and peer_signoff and peer_signoff.digest == digest_before
                          else None)
+        # Taken after the prompt (building it can run the gate) and compared
+        # before the gate runs again, so it holds this turn's changes only.
+        manifest = self.workspace.fingerprint(include_gate_outputs=True) if self.workspace.gate else None
 
         self.emit("turn_start", round=round_no, agent=agent, role=role, backend=adapter.backend)
         reply, env, attempts, transient = self._send(
@@ -783,6 +862,7 @@ class Orchestrator:
                     reply.meta["cost_usd"] = reply.meta["cost_usd"] + first_cost
 
         if not reply.ok and not env.parse_ok:
+            self._note_agent_changes(agent, round_no, manifest)
             digest_now = self.workspace.digest()
             changed = digest_now != digest_before
             peer = self.state.peer_of(agent)
@@ -856,6 +936,7 @@ class Orchestrator:
         if refused:
             self.pending_refused[self.state.peer_of(agent)] = refused
 
+        self._note_agent_changes(agent, round_no, manifest)
         digest_after = self.workspace.digest()
         requested = env.run_gate and env.verdict == "CONTINUE"
         gate = (self.requested_gate(digest_after) if requested
@@ -1119,6 +1200,14 @@ class Orchestrator:
         for name, note in (data.get("pending_restarted") or {}).items():
             if name in self.adapters and str(note or "").strip():
                 self.pending_restarted[name] = str(note)
+
+        # What the gate was seen to write, and what the agents wrote, both for
+        # the rest of the session: without them a resumed session would hash
+        # the build output again (and could later mistake an agent's earlier
+        # edit for the gate's).
+        self.agent_changed = {str(p) for p in data.get("agent_changed") or [] if str(p).strip()}
+        self.workspace.gate_outputs = {str(p) for p in data.get("gate_outputs") or []
+                                       if str(p).strip() and str(p) not in self.agent_changed}
 
         # A BLOCKED verdict is why that session stopped. The human has since
         # asked for it to carry on, so it is history, not a live position:
@@ -1412,6 +1501,8 @@ class Orchestrator:
                 "pending_reads": {k: list(v) for k, v in self.pending_reads.items()},
                 "pending_patch_log": {k: list(v) for k, v in self.pending_patch_log.items()},
                 "pending_restarted": dict(self.pending_restarted),
+                "gate_outputs": sorted(self.workspace.gate_outputs),
+                "agent_changed": sorted(self.agent_changed),
                 "result": (
                     {"status": result.status, "rounds": result.rounds, "reason": result.reason}
                     if result
@@ -1493,6 +1584,9 @@ class Orchestrator:
             lines += ["", "## Acceptance gate", "", "```", result.gate.render(1500), "```"]
             if result.gate.log:
                 lines += ["", "Full output: [%s](%s)" % (Path(result.gate.log).name, result.gate.log)]
+        outputs = self.gate_outputs_line()
+        if outputs:
+            lines += ["", outputs]
         open_issues = self.state.open_issues()
         lines += ["", "## Issues", ""]
         if not self.state.issues:
