@@ -7,6 +7,7 @@ parses back.
 
 import json
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -367,6 +368,68 @@ def test_allowing_the_gate_steps_over_a_quoted_env_assignment(tmp_path):
     agent = ClaudeCodeAdapter(name="claude", cwd=str(tmp_path))
     agent.allow_gate('SIM_NAME="iPhone 17" make all')
     assert agent.allowed_tools == ["Bash(make:*)"]
+
+
+@pytest.mark.parametrize("gate, rule", [
+    ("bash scripts/gate.sh", "Bash(bash scripts/gate.sh:*)"),
+    ("python -m pytest -q", "Bash(python -m pytest:*)"),
+    ("npx vitest run", "Bash(npx vitest:*)"),
+    ("env FOO=1 make test", "Bash(make:*)"),
+    ("env A=1 bash x.sh", "Bash(bash x.sh:*)"),
+    ("env -i -u X A=1 python3 -m pytest", "Bash(python3 -m pytest:*)"),
+    ("/usr/bin/python3 -m pytest -q", "Bash(/usr/bin/python3 -m pytest:*)"),
+    ("python3.12 -m pytest", "Bash(python3.12 -m pytest:*)"),
+    ("node scripts/test.js", "Bash(node scripts/test.js:*)"),
+    ("uv run pytest", "Bash(uv run pytest:*)"),
+    ("poetry run python -m pytest -x", "Bash(poetry run python -m pytest:*)"),
+    ("bun test", "Bash(bun test:*)"),
+    (r"C:\venv\Scripts\python.exe -m pytest -q", r"Bash(C:\venv\Scripts\python.exe -m pytest:*)"),
+    (r'"C:\Program Files\Py\python.exe" -m pytest', r'Bash("C:\Program Files\Py\python.exe" -m pytest:*)'),
+    ("npx.cmd vitest run", "Bash(npx.cmd vitest:*)"),
+    # not an interpreter: the rule is what it always was
+    ("make test", "Bash(make:*)"),
+    ("./scripts/gate.sh", "Bash(./scripts/gate.sh:*)"),
+    ("pytest -q", "Bash(pytest:*)"),
+    ("swift test", "Bash(swift:*)"),
+])
+def test_an_interpreter_gate_is_allowed_through_its_script_or_module(tmp_path, gate, rule):
+    """`bash scripts/gate.sh` granted `Bash(bash:*)`, which also allows
+    `bash -c "<anything>"` — far wider than the gate. The rule runs the gate's
+    own script or module, and narrower variants of it (`pytest tests/x.py`)."""
+    agent = ClaudeCodeAdapter(name="claude", cwd=str(tmp_path))
+    agent.allow_gate(gate)
+    assert agent.allowed_tools == [rule]
+
+
+INTERPRETERS = ("sh", "bash", "zsh", "dash", "fish", "python", "python3", "node",
+                "ruby", "perl", "php", "deno", "bun", "npx", "env", "uv", "poetry")
+
+
+@pytest.mark.parametrize("gate", [
+    "bash x.sh", "sh -c 'x'", "python3 -m pytest", "/usr/bin/python3 -m pytest -q",
+    "node scripts/test.js", "uv run pytest", "env A=1 bash x.sh",
+    'bash -c "pytest -q"', "python -c 'import pytest'", "node -e 'x'", "deno eval x",
+    "python3.12 -W error -m pytest", "bash", "uv run", "env -S 'bash -c x'",
+    "make && bash -ec 'x' && python -m pytest",
+])
+def test_a_gate_never_grants_a_bare_interpreter(tmp_path, gate):
+    """However the gate starts its interpreter, `Bash(<interpreter>:*)` would let
+    an agent run any code at all through it. Inline code, or an option that
+    cannot be read safely, grants nothing; the agent has `duet gate` for it."""
+    agent = ClaudeCodeAdapter(name="claude", cwd=str(tmp_path))
+    agent.allow_gate(gate)
+    for rule in agent.allowed_tools:
+        program = rule[len("Bash("):-len(":*)")]
+        last = re.split(r"[\\/]", program)[-1]
+        assert last not in INTERPRETERS, (gate, rule)
+        assert not re.fullmatch(r"python[\d.]*", last), (gate, rule)
+        assert "-c" not in program.split() and "-e" not in program.split(), (gate, rule)
+
+
+def test_an_inline_code_gate_grants_nothing(tmp_path):
+    agent = ClaudeCodeAdapter(name="claude", cwd=str(tmp_path))
+    agent.allow_gate("""bash -c "pytest -q" && python -c 'print(1)'""")
+    assert agent.allowed_tools == []
 
 
 def test_an_adapter_without_permissions_ignores_the_gate(tmp_path):

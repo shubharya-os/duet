@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -184,24 +183,138 @@ class ClaudeCodeAdapter(Adapter):
 
         `acceptEdits` lets the agent write files but not run anything, so it had
         to trust the harness's report of the test run instead of seeing it. This
-        grants Bash for the gate's executables only — `pytest`, `npm`, whatever
-        the gate actually invokes — and nothing else.
+        grants Bash for the gate's programs only — `pytest`, `npm`, whatever the
+        gate actually invokes — and nothing else.
+
+        For a shell or interpreter the program is the script or module it runs,
+        not the interpreter: `Bash(bash:*)` or `Bash(python:*)` would let an
+        agent run `bash -c "<anything>"`, so `bash scripts/gate.sh` grants
+        `Bash(bash scripts/gate.sh:*)` and `python -m pytest -q` grants
+        `Bash(python -m pytest:*)`. A segment this cannot narrow — inline code,
+        or an option it cannot read — grants nothing; the agent still has
+        `duet gate`.
         """
         for segment in re.split(r"&&|\|\||;|\|", gate or ""):
-            # Shell-style words, so a quoted assignment (`SIM="iPhone 17" make all`)
-            # is one word to step over, not `17"` mistaken for the command.
-            try:
-                parts = shlex.split(segment)
-            except ValueError:
-                parts = segment.strip().split()
-            # step over any leading VAR=value assignments to reach the command
-            while parts and "=" in parts[0] and not parts[0].startswith("/"):
-                parts = parts[1:]
-            if not parts:
+            prefix = self._gate_prefix(self._words(segment))
+            if not prefix:
                 continue
-            rule = "Bash(%s:*)" % parts[0]
+            rule = "Bash(%s:*)" % prefix
             if rule not in self.allowed_tools:
                 self.allowed_tools.append(rule)
+
+    # A shell or interpreter runs whatever code it is handed, so its name alone
+    # is never the rule. Matched on the program's name, whatever its directory
+    # and with any Windows extension dropped: `/usr/bin/python3`, `node.exe`,
+    # `npx.cmd`.
+    INTERPRETER = re.compile(
+        r"(sh|bash|zsh|dash|ksh|fish|python(\d+(\.\d+)*)?|pythonw|pypy\d*"
+        r"|node|ruby|perl|php|deno|bun|bunx|npx)$")
+    # Run a program of their own choosing as their first argument.
+    RUNNERS = ("uv", "poetry")
+    # Commands of theirs that run inline code: `deno eval`, `bun x`.
+    INLINE_SUBCOMMANDS = ("eval", "repl", "x", "exec")
+
+    @staticmethod
+    def _words(segment: str) -> List[Tuple[str, str]]:
+        """(as written, unquoted) for each shell word of one gate segment.
+
+        As written is what goes in the rule, since Claude Code matches the
+        command text the agent types: a quoted Windows path stays quoted and its
+        backslashes stay (`shlex.split` would drop them). Unquoted is what names
+        the program. Quotes group words, so `SIM="iPhone 17"` is one word; an
+        unbalanced quote falls back to splitting on spaces.
+        """
+        words: List[Tuple[str, str]] = []
+        written, plain, quote, started = "", "", "", False
+        for ch in segment:
+            if quote:
+                written += ch
+                if ch == quote:
+                    quote = ""
+                else:
+                    plain += ch
+            elif ch in "\"'":
+                quote, started = ch, True
+                written += ch
+            elif ch.isspace():
+                if started:
+                    words.append((written, plain))
+                written, plain, started = "", "", False
+            else:
+                written += ch
+                plain += ch
+                started = True
+        if quote:
+            return [(w, w) for w in segment.split()]
+        if started:
+            words.append((written, plain))
+        return words
+
+    def _gate_prefix(self, words: List[Tuple[str, str]]) -> str:
+        """The command prefix one gate segment may be run with, or "" for none."""
+        def name(i: int) -> str:
+            base = re.split(r"[\\/]", words[i][1])[-1].lower()
+            return re.sub(r"\.(exe|cmd|bat)$", "", base)
+
+        def through(end: int) -> str:
+            return " ".join(w for w, _ in words[start:end + 1])
+
+        # Step over leading VAR=value assignments and `env` (with `-i` or
+        # `-u NAME`) to reach the command.
+        i = 0
+        while i < len(words):
+            if "=" in words[i][1] and not words[i][1].startswith("/"):
+                i += 1
+            elif name(i) == "env":
+                i += 1
+                while i < len(words) and words[i][1] in ("-i", "-", "--ignore-environment", "-u"):
+                    i += 2 if words[i][1] == "-u" else 1
+                if i < len(words) and words[i][1].startswith("-"):
+                    return ""   # `env -S '<anything>'` and the rest: not narrowed
+                # `env` accepts assignments between its options and the command.
+                while i < len(words) and "=" in words[i][1] and not words[i][1].startswith("/"):
+                    i += 1
+            else:
+                break
+        if i >= len(words):
+            return ""
+        start = i
+        program = name(i)
+        if program in self.RUNNERS:
+            # `uv run pytest`, `poetry run python -m pytest`: what follows `run`
+            # is a command in its own right; `uv sync` is just that subcommand.
+            if i + 1 >= len(words) or words[i + 1][1].startswith("-"):
+                return ""
+            if words[i + 1][1] != "run":
+                return through(i + 1)
+            i += 2
+            if i >= len(words) or words[i][1].startswith("-"):
+                return ""
+            program = name(i)
+        if not self.INTERPRETER.match(program):
+            return through(i)
+        # An interpreter: grant it through the script, module or subcommand.
+        nxt = i + 1
+        if nxt >= len(words):
+            return ""
+        arg = words[nxt][1]
+        if program.startswith("python") or program.startswith("pypy"):
+            if arg == "-m" and nxt + 1 < len(words):
+                return through(nxt + 1)
+        if program in ("deno", "bun") and not arg.startswith("-"):
+            if arg in self.INLINE_SUBCOMMANDS:
+                return ""
+            if arg == "run":
+                # `bun run test`, `deno run x.ts`: through what it runs
+                if nxt + 1 < len(words) and not words[nxt + 1][1].startswith("-"):
+                    return through(nxt + 1)
+                return ""
+        if arg.startswith("-"):
+            # `-c`, `-e`, `--eval`, or an option that takes a value this cannot
+            # tell from the script: nothing narrower than the interpreter is
+            # certain, so grant nothing.
+            return ""
+        return through(nxt)
 
     def allow_agent_gate(self, command: str) -> None:
         """Permit `duet gate` — the whole command, as the agent is told to type it.

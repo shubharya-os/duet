@@ -1029,6 +1029,11 @@ ERROR` would be.
 - Claude Code runs under `acceptEdits`, not a blanket bypass, and is granted Bash for
   your gate's own commands, `duet gate` when there is a gate, and plainly read-only
   commands: `cat`, `head`, `tail`, `grep`, `wc`, `ls` and `git status` — nothing wider.
+  The gate's own commands are its programs run the way the gate runs them, and
+  narrower variants: `make test` allows `make ...`; an interpreter is allowed only
+  through its script or module (`bash scripts/gate.sh ...`, `python -m pytest ...`,
+  `npx vitest ...`), never bare `bash` or `python`, and inline code such as
+  `bash -c "..."` is allowed only through `duet gate`.
   Claude Code checks each part of a compound command and every output redirection
   on its own, so these do not open up `cat a > /tmp/x` or `cat a | sh`. `git diff`,
   `git show` and `git log` are left out: their `--output=<file>` writes anywhere
