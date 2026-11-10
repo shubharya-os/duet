@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.18.0
 
 - Agents get a sanctioned way to run the gate: `duet gate`. Measured on 262 real
   sessions on duet 0.15+, 144 (55%) had refused calls, 466 in all; the largest
