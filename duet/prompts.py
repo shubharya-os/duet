@@ -37,7 +37,7 @@ How this actually works:
   you the result next turn. That is how you get a compile or test check you
   cannot run. BLOCKED is only for what neither of you can fix — missing
   credentials, a broken machine, a decision only the user can make — because
-  BLOCKED stops the session.
+  BLOCKED stops the session.{gate_channel}
 - The session ends when you BOTH vote DONE on the same workspace state with no
   blocking issue open and the gate green. Your peer's DONE cannot end it without
   yours, and yours cannot end it without theirs.
@@ -80,6 +80,25 @@ gate. To see a file you have not been shown, list its path in `reads` and it
 will be included in your next turn."""
 
 
+# For an agent with its own tools in a session with a gate. Measured on 262
+# sessions: 27% had an agent refused while running the gate wrapped in
+# redirects and pipes, and sed/cp/mkdir/rm through the shell were refused 103
+# times between them.
+_RUN_THE_GATE = """
+- To run the gate yourself, run exactly `{command}` — nothing added. It runs
+  the session's gate here, prints what the harness would show you (failures
+  first), saves the whole output to a file it names, and exits with the gate's
+  code. Do not run the raw gate command with redirects or pipes (`> log`,
+  `2>&1 | tail`, `| tee`): those are refused and the run never happens. Your
+  own run is shown to your peer but is not the harness's gate: only the
+  harness's run counts for a sign-off, and CONTINUE with "run_gate": true is
+  still how to have it run.
+- Make file changes with your edit tools, not through the shell (`sed -i`,
+  `cp`, `mv`, `mkdir`, `rm`, `>`): the permission mode can refuse those, and a
+  refused edit never happened. Reading through the shell is fine — `cat`,
+  `head`, `tail`, `grep`, `wc`, `ls`, `git status`."""
+
+
 def system_prompt(
     *,
     name: str,
@@ -89,9 +108,12 @@ def system_prompt(
     role: str,
     root: str,
     edits_workspace: bool,
+    gate_command: str = "",
 ) -> str:
     return (
         _IDENTITY.format(
+            gate_channel=(_RUN_THE_GATE.format(command=gate_command)
+                          if gate_command and edits_workspace else ""),
             display=display,
             name=name,
             peer=peer,
@@ -152,6 +174,7 @@ def turn_prompt(
     files: Optional[Dict[str, str]] = None,
     patch_log: Optional[Sequence[str]] = None,
     peer_refused: Optional[Sequence[str]] = None,
+    peer_gate_runs: Optional[Sequence[str]] = None,
     turn_timeout: int = 0,
     restarted: str = "",
     gate_outputs: str = "",
@@ -186,6 +209,13 @@ def turn_prompt(
             "them — a test result, a command's output — is unverified; check it\n"
             "yourself rather than take it as seen.\n%s"
             % (peer.upper(), "\n".join("- %s" % c for c in peer_refused))
+        )
+    if peer_gate_runs:
+        parts.append(
+            "\n=== %s RAN THE GATE ITSELF (duet gate) ===\n"
+            "Its own runs during its turn, not the harness's: the gate below is the\n"
+            "one sign-offs are counted against.\n%s"
+            % (peer.upper(), "\n".join("- %s" % r for r in peer_gate_runs))
         )
     if restarted.strip():
         parts.append("\n=== AN EDIT RESTARTED THE AGREEMENT ===\n%s" % restarted.strip())

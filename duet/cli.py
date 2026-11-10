@@ -2089,6 +2089,13 @@ def _signed_state(data: Dict[str, Any]) -> Tuple[str, Dict[str, Dict[str, Any]],
     return only, signoffs, ""
 
 
+def cmd_gate(args: argparse.Namespace) -> int:
+    """`duet gate` — see duet/agent_gate.py."""
+    from duet import agent_gate
+
+    return agent_gate.main(str(getattr(args, "root", ".") or "."))
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     from duet.workspace import Workspace
 
@@ -3234,6 +3241,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument("session", nargs="?", help="session id (default: the last one that saved state)")
     p_verify.add_argument("--gate", help="check against this command instead of the one the session recorded")
     p_verify.set_defaults(func=cmd_verify)
+
+    # For the agents inside a session; it starts none, so no nesting guard.
+    p_gate = sub.add_parser(
+        "gate",
+        help="(inside a session) run the session's gate, save its output, exit with its code",
+    )
+    p_gate.add_argument("-C", "--root", default=".", help="workspace directory (default: .)")
+    p_gate.set_defaults(func=cmd_gate)
 
     return parser
 

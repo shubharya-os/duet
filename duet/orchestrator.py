@@ -19,7 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-from duet import __version__, gate_cache, make, page, prompts, workflows
+from duet import __version__, agent_gate, gate_cache, make, page, prompts, workflows
+from duet import gate as gate_detect
 from duet.adapters import build as build_adapter
 from duet.adapters.base import (
     DEFAULT_TURN_TIMEOUT,
@@ -373,6 +374,19 @@ class Orchestrator:
             if command:
                 for adapter in self.adapters.values():
                     adapter.allow_gate(command)
+        # How an agent runs the gate itself: `duet gate`, never the raw command
+        # wrapped in redirects and pipes, which the permission mode refuses.
+        # See duet/agent_gate.py. Only with a gate: without one it has nothing
+        # to run.
+        self.agent_gate_command = ("%s gate" % gate_detect.duet_command()) if config.gate else ""
+        if self.agent_gate_command:
+            for adapter in self.adapters.values():
+                adapter.allow_agent_gate(self.agent_gate_command)
+        # How many of the agents' own gate runs (agent_gate.AGENT_GATES) the
+        # harness has already taken in, and what the last turn's were, owed to
+        # the peer's next prompt.
+        self._agent_gates_seen = 0
+        self.pending_agent_gates: Dict[str, List[str]] = {}
         # The turn limit the session was started (or resumed) with. Applied to
         # every adapter, including ones handed in ready-made, so there is one
         # answer to "how long does a turn get" and the agents can be told it.
@@ -655,7 +669,7 @@ class Orchestrator:
                   moved=moved[:GATE_OUTPUTS_SHOWN], moved_count=len(moved))
 
     def _learn_gate_outputs(self, changed: List[str], before: Dict[str, str],
-                            after: Dict[str, str]) -> None:
+                            after: Dict[str, str], by: str = "") -> None:
         """Leave what the gate itself wrote out of the signed state.
 
         Not everything it changed: an agent's work must never be hidden from a
@@ -674,8 +688,69 @@ class Orchestrator:
             return
         added = collapse_outputs(claimable, before, after)
         self.workspace.gate_outputs.update(added)
+        extra = {"agent": by} if by else {}
         self.emit("gate_outputs", paths=added[:GATE_OUTPUTS_SHOWN], count=len(added),
-                  files=len(claimable))
+                  files=len(claimable), **extra)
+
+    def _take_agent_gates(self, agent: str, round_no: int) -> List[Dict[str, Any]]:
+        """The `duet gate` runs recorded since the harness last looked — this
+        turn's — each put on the record and owed to the peer's next prompt.
+
+        Shown for what they are: the agent's own run, never the harness's gate.
+        Nothing here goes near _gate_cache, so no sign-off is counted against one.
+        """
+        runs = agent_gate.read_runs(self.session_dir)[self._agent_gates_seen:]
+        self._agent_gates_seen += len(runs)
+        lines: List[str] = []
+        for run in runs:
+            ok = bool(run.get("ok"))
+            said = ("PASSED" if ok else "TIMED OUT" if run.get("timed_out")
+                    else "FAILED (exit %s)" % run.get("exit_code"))
+            state = str(run.get("digest_before") or "")[:8]
+            self.emit("agent_gate", round=round_no, agent=agent, ok=ok,
+                      exit_code=run.get("exit_code"), timed_out=bool(run.get("timed_out")),
+                      digest=run.get("digest_before"), log=run.get("log"),
+                      changed=len(run.get("changed") or {}))
+            lines.append("on state %s: %s%s" % (state, said,
+                                                 " — whole output in %s" % run["log"] if run.get("log") else ""))
+        if lines:
+            self.pending_agent_gates[self.state.peer_of(agent)] = lines
+            last = runs[-1]
+            self.history.append("R%-2d %-6s RAN GATE  %d time(s) with `duet gate`; last: %s"
+                                % (round_no, agent, len(runs),
+                                   "PASS" if last.get("ok") else
+                                   "TIMED OUT" if last.get("timed_out") else "FAIL"))
+        return runs
+
+    @staticmethod
+    def _written_by_agent_gates(runs: List[Dict[str, Any]], start: Dict[str, str],
+                                now: Dict[str, str]) -> List[str]:
+        """The paths this turn changed that the agent's gate runs, and nothing
+        else, account for.
+
+        Followed run by run: a path's hash when the turn began must be the one
+        the first run that touched it found, each later run must find it as the
+        one before left it, and it must still be as the last run left it. Any
+        gap is the agent's own hand — an edit before, between or after the runs
+        — and the path is the agent's, so its work is never hidden.
+        """
+        seen: Dict[str, Any] = {}
+        broken: Set[str] = set()
+        for run in runs:
+            changed = run.get("changed")
+            if not isinstance(changed, dict):
+                continue
+            for path, pair in changed.items():
+                if not isinstance(pair, list) or len(pair) != 2:
+                    broken.add(path)
+                    continue
+                found, left = pair
+                expected = seen[path] if path in seen else start.get(path)
+                if found != expected:
+                    broken.add(path)
+                seen[path] = left
+        return sorted(p for p, left in seen.items()
+                      if p not in broken and now.get(p) == left and start.get(p) != left)
 
     def _note_agent_changes(self, agent: str, round_no: int,
                             manifest: Optional[Dict[str, str]]) -> None:
@@ -683,7 +758,25 @@ class Orchestrator:
         touched: from now on that path is the agent's, and part of the state."""
         if manifest is None:
             return
-        changed = changed_paths(manifest, self.workspace.fingerprint(include_gate_outputs=True))
+        now = self.workspace.fingerprint(include_gate_outputs=True)
+        runs = self._take_agent_gates(agent, round_no)
+        changed = changed_paths(manifest, now)
+        if not changed:
+            return
+        # What the agent's own `duet gate` runs wrote is the gate's, learned
+        # under exactly the rules a harness run is; everything else is the
+        # agent's. A path the gate wrote but may not leave out (tracked, a
+        # test, an agent's earlier edit) stays with the agent, as before.
+        # The per-run manifest is an assertion from a file the agent can in
+        # principle forge. Require the command's companion output log to exist
+        # inside this session before using that assertion to hide workspace
+        # changes from sign-off. Keep reporting unverified records as claims,
+        # but never use them to classify a path as gate output.
+        verified_runs = [run for run in runs if self._agent_gate_log_exists(run)]
+        written = self._written_by_agent_gates(verified_runs, manifest, now)
+        if written:
+            self._learn_gate_outputs(written, manifest, now, by=agent)
+        changed = [p for p in changed if not (p in written and self.workspace.is_gate_output(p))]
         if not changed:
             return
         self.agent_changed.update(changed)
@@ -693,6 +786,23 @@ class Orchestrator:
             self.workspace.gate_outputs.difference_update(returned)
             self.emit("gate_outputs_returned", round=round_no, agent=agent,
                       paths=returned[:GATE_OUTPUTS_SHOWN], count=len(returned))
+
+    def _agent_gate_log_exists(self, run: Dict[str, Any]) -> bool:
+        """Whether a run has its saved log in this session directory.
+
+        Agent-gate records are an audit trail, not a signing authority. In
+        particular, a forged manifest must not make an agent edit disappear
+        from the state merely by appending JSON to that trail.
+        """
+        raw = run.get("log")
+        if not isinstance(raw, str) or not raw:
+            return False
+        try:
+            log = Path(raw).resolve()
+            log.relative_to(self.session_dir.resolve())
+            return log.is_file()
+        except (OSError, ValueError):
+            return False
 
     def gate_outputs_line(self) -> str:
         """One line naming the gate's outputs, for the agents and the report."""
@@ -736,6 +846,7 @@ class Orchestrator:
             files=files or None,
             patch_log=self.pending_patch_log.pop(agent, None),
             peer_refused=self.pending_refused.pop(agent, None),
+            peer_gate_runs=self.pending_agent_gates.pop(agent, None),
             turn_timeout=self.turn_budget(agent),
             restarted=self.pending_restarted.pop(agent, ""),
             gate_outputs=self.gate_outputs_line(),
@@ -753,6 +864,7 @@ class Orchestrator:
             role=self.role_of(agent, round_no),
             root=self.config.root,
             edits_workspace=adapter.edits_workspace,
+            gate_command=self.agent_gate_command,
         )
 
     def _note_model_fallback(self, agent: str, round_no: int, reply: Any) -> None:
@@ -846,8 +958,10 @@ class Orchestrator:
                     state=("Some files did change this turn, so the workspace may hold only part "
                            "of what you meant.") if changed else
                           "The workspace is byte-identical to how it was when your turn began.",
-                    commands=("The only commands you can run are the project's own: %s."
-                              % " / ".join(c for c in (self.config.gate, self.config.allow_run) if c))
+                    commands=("The only commands you can run are the project's own: %s%s."
+                              % (" / ".join(c for c in (self.config.gate, self.config.allow_run) if c),
+                                 ", `%s` (the gate, with its whole output saved for you)"
+                                 % self.agent_gate_command if self.agent_gate_command else ""))
                              if (self.config.gate or self.config.allow_run) else
                              "You cannot run shell commands here.",
                 ),

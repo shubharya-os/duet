@@ -316,6 +316,12 @@ class Adapter:
         """
         return None
 
+    def allow_agent_gate(self, command: str) -> None:
+        """Let this agent run `duet gate` (see duet/agent_gate.py), if it needs
+        permission for that. Default: nothing to do — Codex runs it in its
+        sandbox like any other command."""
+        return None
+
     def read_only(self) -> str:
         """Stop this agent writing to the workspace, if the backend can.
 
