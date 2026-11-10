@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.18.1
 
 - The Bash rule Claude Code is granted for the gate no longer covers a whole
   interpreter. It was `Bash(<first word>:*)` for each part of the gate, so a gate
