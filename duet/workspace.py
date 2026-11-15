@@ -16,7 +16,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from duet.adapters.base import human_duration
 from duet.config import DEFAULT_GATE_TIMEOUT
@@ -775,14 +775,38 @@ class Workspace:
             )
         except OSError as exc:
             return GateResult(command=command, ok=False, exit_code=127, output=str(exc))
+        deadline = started + self.gate_timeout
+        held = False
         try:
-            stdout, stderr = proc.communicate(timeout=self.gate_timeout)
+            while True:
+                # In slices, watching the gate itself: the pipes reach EOF only
+                # when everything holding them has gone, and a helper the gate
+                # left behind would otherwise turn a finished run into one
+                # that "timed out" at its limit.
+                try:
+                    stdout, stderr = proc.communicate(
+                        timeout=max(0.0, min(GATE_POLL, deadline - time.monotonic())))
+                    break
+                except subprocess.TimeoutExpired:
+                    if proc.poll() is not None:
+                        # Finished. What is left of its process group goes;
+                        # what it started in a session of its own cannot.
+                        stop_process_group(proc)
+                        stdout, stderr, held = read_after_stop(proc)
+                        break
+                    if time.monotonic() >= deadline:
+                        raise
         except subprocess.TimeoutExpired:
             stop_process_group(proc)
-            stdout, stderr = proc.communicate()
+            # Bounded: a helper the gate started in a session of its own (a
+            # simulator log stream, a daemon) outlives the group kill and holds
+            # the pipes, and an unbounded read waited for it — hours, live.
+            stdout, stderr, held = read_after_stop(proc)
             # Keep what it printed before it was stopped: how far the run got
             # is the first thing anyone deciding on a longer limit wants to see.
             partial = (stdout or "") + (stderr or "")
+            if held:
+                partial += LEFT_RUNNING_NOTE
             return GateResult(
                 command=command,
                 ok=False,
@@ -797,6 +821,8 @@ class Workspace:
             stop_process_group(proc)
             raise
         output = (stdout or "") + (stderr or "")
+        if held:
+            output += LEFT_RUNNING_NOTE
         return GateResult(
             command=command,
             ok=proc.returncode == 0,
@@ -865,6 +891,60 @@ def stop_process_group(proc: "subprocess.Popen[str]", grace: float = 3.0) -> Non
         proc.wait(timeout=grace)
     except subprocess.TimeoutExpired:
         pass
+
+
+# How long to keep reading a stopped command's output. Its own processes are
+# gone by then; this only lets the last of what they wrote arrive.
+DRAIN_GRACE = 3.0
+# How often a running gate is checked for having exited on its own.
+GATE_POLL = 1.0
+
+LEFT_RUNNING_NOTE = (
+    "\n[duet] Something the gate started is still running and holding its output: "
+    "a process in a session of its own (a daemon, a log stream, `setsid`, "
+    "start_new_session) that duet could not stop. duet stopped reading after a "
+    "few seconds; look at what your gate script starts in the background.\n")
+
+
+def read_after_stop(proc: "subprocess.Popen", grace: float = DRAIN_GRACE
+                    ) -> Tuple[Any, Any, bool]:
+    """(stdout, stderr, held) of a command already stopped by stop_process_group.
+
+    Reads for at most `grace` seconds. `held` is True when the pipes were still
+    open after that — something the command started outlived the stop — and
+    the output is then what had arrived, the part before the time limit
+    included, with the pipes closed rather than waited on.
+    """
+    try:
+        stdout, stderr = proc.communicate(timeout=grace)
+        return stdout, stderr, False
+    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = exc.stdout, exc.stderr
+    if os.name == "nt":
+        # Windows reads the pipes in threads and its TimeoutExpired carries
+        # nothing; what they read so far is in their buffers. Closing a pipe
+        # a thread is blocked reading would block here too, so they are left.
+        if stdout is None:
+            stdout = b"".join(getattr(proc, "_stdout_buff", None) or []) or None
+        if stderr is None:
+            stderr = b"".join(getattr(proc, "_stderr_buff", None) or []) or None
+    else:
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None:
+                try:
+                    pipe.close()
+                except OSError:
+                    pass
+    return _as_proc_text(proc, stdout), _as_proc_text(proc, stderr), True
+
+
+def _as_proc_text(proc: "subprocess.Popen", data: Any) -> Any:
+    """Partial output as communicate() would have returned it: text for a
+    text-mode Popen (TimeoutExpired carries raw bytes even then), else bytes."""
+    if data is None or isinstance(data, str) or not getattr(proc, "text_mode", False):
+        return data
+    text = data.decode(getattr(proc, "encoding", None) or "utf-8", "replace")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def changed_paths(before: Dict[str, str], after: Dict[str, str]) -> List[str]:

@@ -25,7 +25,6 @@ from __future__ import annotations
 import contextlib
 import re
 import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -34,6 +33,7 @@ from typing import Optional, Tuple
 from duet import ui, workflows
 from duet.winlaunch import quote_for_shell
 from duet.workspace import SKIP_DIRS as WORKSPACE_SKIP_DIRS
+from duet.workspace import Workspace
 
 TASK = """\
 Build this, from nothing, in this directory:
@@ -271,13 +271,12 @@ def gate_proves_nothing(gate: str, root: str) -> bool:
     """
     if not gate or has_tests(root):
         return False
-    try:
-        proc = subprocess.run(gate, cwd=str(Path(root).expanduser().resolve()),
-                              shell=True, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=300)
-    except (OSError, subprocess.SubprocessError):
-        return False        # cannot start is a different problem, already checked
-    return proc.returncode == 0
+    # The gate's own runner: at the limit it stops the whole tree, not just the
+    # shell, and returns even when the gate left a helper holding its output.
+    # Cannot start (exit 127) and out of time are not "green", as before.
+    result = Workspace(str(Path(root).expanduser().resolve()), gate=gate,
+                       gate_timeout=300).run_gate()
+    return result.ok
 
 
 def announce(gate: str, source: str) -> None:
