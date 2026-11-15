@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.0
 
 - `--final-gate CMD`: a two-tier gate — the fast gate (`--gate`) for every turn,
   and a slow final gate only before consensus. Measured on real sessions on duet
