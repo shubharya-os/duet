@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- `duet status` names the round under way, not the last one finished. The
+  round was taken from completed turns only (or from the last event, when it
+  happened to carry one), so for the whole of a turn and the gate run on it —
+  often 30–60 minutes — a live session showed the round before: "round 0" and
+  "claude no turn yet" all through the first turn. The running line now gives
+  the round of the latest `turn_start` and what is happening in it: the agent
+  thinking, the gate running on that turn's state (a `gate_start` with no
+  `gate_done` yet), or the final gate. The agent whose turn is open reads
+  "in round N now" instead of "no turn yet". `--json` adds the same `round`
+  and a `doing` field (`turn`, `gate`, `final_gate`, `between_turns`,
+  `starting`); `rounds` still counts rounds finished, and `waiting_on` names
+  the agent whenever its turn is thinking, not only while `turn_start` is the
+  last event.
+
+
 ## 0.19.0
 
 - `--final-gate CMD`: a two-tier gate — the fast gate (`--gate`) for every turn,
