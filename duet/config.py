@@ -140,6 +140,12 @@ class Config:
     # default a turn that says CONTINUE leaves its gate deferred until someone
     # votes DONE. Saved with the session, so `duet resume` keeps it.
     gate_every_turn: bool = False
+    # `--final-gate`: a slower gate run only when the pair would otherwise
+    # agree — both signed off on one state, nothing blocking, `gate` green on
+    # it and the workflow rule met. Everything else (every turn, run_gate,
+    # `duet gate`, the workflow rules) uses `gate`. Saved with the session, so
+    # `duet resume` keeps it.
+    final_gate: str = ""
     # How long one agent's turn may take, in seconds. 0 means each backend's own
     # default. It is on the config — not only on the agent options — so that
     # `--turn-timeout` is saved with the session and `duet resume` keeps it;
