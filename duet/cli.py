@@ -1709,6 +1709,61 @@ def _what_it_was_doing(events: List[Dict[str, Any]]) -> str:
     return "while starting up"
 
 
+# What a running session is doing now, as `duet status --json` names it.
+DOING_STARTING = "starting"
+DOING_TURN = "turn"
+DOING_GATE = "gate"
+DOING_FINAL_GATE = "final_gate"
+DOING_BETWEEN = "between_turns"
+
+
+def live_position(events: List[Dict[str, Any]]) -> Tuple[int, Optional[str], str]:
+    """(round, agent whose turn is open or None, what is happening now).
+
+    The round is the latest turn_start's, not the latest turn_done's: a turn
+    and the gate run on its state can take most of an hour, and counting only
+    finished turns showed all of it as the round before. A turn stays open
+    until its turn_done (or turn_error) — the gate on its state runs before
+    that — so the agent is still named while the gate runs.
+    """
+    round_no, agent = 0, None
+    turn_open = gate_open = final_open = False
+    for event in events:
+        kind = event.get("kind")
+        if kind == "turn_start":
+            round_no = int(event.get("round") or round_no)
+            agent, turn_open = event.get("agent"), True
+        elif kind in ("turn_done", "turn_error"):
+            round_no = max(round_no, int(event.get("round") or 0))
+            turn_open = False
+        elif kind == "gate_start":
+            gate_open = True
+        elif kind == "gate_done":
+            gate_open = False
+        elif kind == "final_gate_start":
+            final_open = True
+        elif kind == "final_gate_done":
+            final_open = False
+    doing = (DOING_FINAL_GATE if final_open else DOING_GATE if gate_open
+             else DOING_TURN if turn_open else DOING_BETWEEN if round_no else DOING_STARTING)
+    return round_no, (agent if turn_open else None), doing
+
+
+def _describe_doing(doing: str, agent: Optional[str], round_no: int) -> str:
+    """The running line's words for live_position's answer."""
+    if doing == DOING_TURN:
+        return "waiting on %s, thinking" % ui.bold(str(agent))
+    if doing == DOING_GATE:
+        if agent:
+            return "the gate is running on %s's round-%d turn" % (ui.bold(str(agent)), round_no)
+        return "the gate is running" + ("" if round_no else " (opening check)")
+    if doing == DOING_FINAL_GATE:
+        return "the final gate is running"
+    if doing == DOING_BETWEEN:
+        return "between turns"
+    return "starting up"
+
+
 # The first release whose session_start says which duet ran it. A record
 # without the field was written by something older than this.
 FIRST_RECORDED_VERSION = "0.14.0"
@@ -1887,6 +1942,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     restart = restart_command(start, args.root) if dead and not _can_resume(path) else None
     resume = (None if restart else resume_command(path.name, args.root)) if dead \
         else (end or {}).get("resume")
+    round_now, open_agent, doing_now = live_position(events)
 
     if args.json:
         print(json.dumps({
@@ -1897,12 +1953,15 @@ def cmd_status(args: argparse.Namespace) -> int:
             "reason": (end or {}).get("reason") or ("%s %s" % (DEAD_LABEL, doing) if dead else None),
             "resume": resume,
             "restart": restart,
+            # Rounds finished; `round` is the one under way (the latest turn_start).
             "rounds": (turns[-1].get("round") if turns else 0),
+            "round": round_now,
+            "doing": doing_now if running else None,
             "max_rounds": start.get("max_rounds"),
             "task": start.get("task"),
             "verdicts": {a: next((t.get("verdict") for t in reversed(turns) if t.get("agent") == a), None)
                          for a in agents},
-            "waiting_on": (last_event.get("agent") if running and last_event.get("kind") == "turn_start" else None),
+            "waiting_on": open_agent if running and doing_now == DOING_TURN else None,
             "seconds_since_last_event": age,
             # The last turn whose gate ran: a deferred one records None.
             "gate_ok": next((t.get("gate_ok") for t in reversed(turns)
@@ -1922,14 +1981,9 @@ def cmd_status(args: argparse.Namespace) -> int:
     print("  agents:  " + ", ".join(agents))
 
     if running:
-        waiting = last_event.get("agent") if last_event.get("kind") == "turn_start" else None
-        round_no = last_event.get("round") or (turns[-1].get("round") if turns else 0)
-        if waiting:
-            print("  " + ui.yellow("running") + "   round %s of %s — waiting on %s for %dm %02ds"
-                  % (round_no, start.get("max_rounds", "?"), ui.bold(waiting), age // 60, age % 60))
-        else:
-            print("  " + ui.yellow("running") + "   round %s of %s — last event %dm %02ds ago"
-                  % (round_no, start.get("max_rounds", "?"), age // 60, age % 60))
+        print("  " + ui.yellow("running") + "   round %s of %s — %s — last event %dm %02ds ago"
+              % (round_now, start.get("max_rounds", "?"),
+                 _describe_doing(doing_now, open_agent, round_now), age // 60, age % 60))
         note = version_note(start, running=True)
         if note:
             print("  " + ui.yellow(note))
@@ -1953,11 +2007,13 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     for agent in agents:
         last = next((t for t in reversed(turns) if t.get("agent") == agent), None)
+        now = ui.yellow("in round %s now" % round_now) if running and agent == open_agent else ""
         if last is None:
-            print("  %-8s %s" % (agent, ui.dim("no turn yet")))
+            print("  %-8s %s" % (agent, now or ui.dim("no turn yet")))
             continue
-        print("  %-8s %s %s" % (agent, ui.verdict_tag(str(last.get("verdict"))),
-                                ui.dim("round %s" % last.get("round"))))
+        print("  %-8s %s%s %s" % (agent, now + " " + ui.dim("— last ") if now else "",
+                                  ui.verdict_tag(str(last.get("verdict"))),
+                                  ui.dim("round %s" % last.get("round"))))
         message = (last.get("message") or "").strip().replace("\n", " ")
         if message and not args.quiet:
             print(ui.wrap(message[:240] + ("…" if len(message) > 240 else ""), indent="           "))
