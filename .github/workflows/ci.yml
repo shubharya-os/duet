@@ -23,12 +23,19 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.9", "3.11", "3.13"]
         exclude:
+          # ubuntu-latest is Ubuntu 26.04, which setup-python has no 3.9 for;
+          # 3.9 runs on 24.04 instead (see include below).
+          - os: ubuntu-latest
+            python-version: "3.9"
           # Keep the matrix small: the middle version on one OS is enough to
           # catch anything the other two would.
           - os: macos-latest
             python-version: "3.11"
           - os: windows-latest
             python-version: "3.11"
+        include:
+          - os: ubuntu-24.04
+            python-version: "3.9"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -40,7 +47,7 @@ jobs:
       # they are absent, so without this step the guarantee held on ubuntu by
       # luck (its default image happens to ship both) and not at all on macOS.
       - name: dash and shellcheck, so install.sh's POSIX checks cannot silently skip
-        if: matrix.os == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         run: sudo apt-get update && sudo apt-get install -y dash shellcheck
       - name: dash and shellcheck, so install.sh's POSIX checks cannot silently skip
         if: matrix.os == 'macos-latest'
