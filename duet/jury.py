@@ -25,7 +25,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from duet.protocol import SEVERITIES, iter_json_objects, slugify
-from duet.workspace import SKIP_DIRS, Workspace, changed_paths, stop_process_group
+from duet.workspace import (SKIP_DIRS, Workspace, changed_paths, read_after_stop,
+                            stop_process_group)
 
 JURY_CONFIG = "duet-jury.json"
 JURY_FILE = "JURY.md"
@@ -327,9 +328,10 @@ def walkthrough(root: str, command: str, timeout: int = WALKTHROUGH_TIMEOUT) -> 
             # still running and holding the output pipe, so the communicate()
             # below waited for that instead of returning. stop_process_group
             # stops the whole tree (taskkill /T on Windows, the process group
-            # elsewhere).
+            # elsewhere). What it started in a session of its own survives
+            # that and can hold the pipe for ever, so the read is bounded.
             stop_process_group(proc)
-            out, _ = proc.communicate()
+            out, _, _ = read_after_stop(proc)
         text = (out or b"").decode("utf-8", "replace")
         if len(text) > WALKTHROUGH_CHARS:
             text = text[:WALKTHROUGH_CHARS] + "\n...[output cut off at %d chars]..." % WALKTHROUGH_CHARS

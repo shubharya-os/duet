@@ -33,6 +33,7 @@ from duet.config import DEFAULT_GATE_TIMEOUT
 
 from duet.page import PAGE_RULES
 from duet.workspace import SKIP_DIRS as WORKSPACE_SKIP_DIRS
+from duet.workspace import Workspace
 
 # What a test file looks like, across the ecosystems duet detects gates for.
 TEST_GLOBS = (
@@ -306,10 +307,13 @@ def replay_fails(root: str, state: Dict) -> Optional[bool]:
                 if (base / name).is_dir() and not (work / name).exists():
                     (work / name).symlink_to(base / name)
             limit = int(state.get("gate_timeout") or DEFAULT_GATE_TIMEOUT)
-            proc = subprocess.run(gate, cwd=str(work), shell=True,
-                                  capture_output=True, text=True, encoding="utf-8",
-                                  errors="replace", timeout=limit)
-    except subprocess.TimeoutExpired:
+            # The gate's own runner: at its limit it stops the whole process
+            # tree, not just the shell, and gets control back even when the
+            # gate left a helper holding its output.
+            result = Workspace(str(work), gate=gate, gate_timeout=limit).run_gate()
+    except (OSError, subprocess.SubprocessError, shutil.Error):
+        return None
+    if result.timed_out:
         # Not a pass and not a fail: it says nothing about whether the tests
         # catch the bug, and "no replay was possible" without this would leave
         # the reader guessing why.
@@ -317,11 +321,8 @@ def replay_fails(root: str, state: Dict) -> Optional[bool]:
             "the replay ran out of time after %s, which is not a test result — "
             "give it longer with --gate-timeout MINUTES" % human_duration(limit))
         return None
-    except (OSError, subprocess.SubprocessError, shutil.Error):
-        return None
-    failed = proc.returncode != 0
-    state["replay_import_only"] = failed and failed_only_on_imports(
-        (proc.stdout or "") + (proc.stderr or ""))
+    failed = not result.ok
+    state["replay_import_only"] = failed and failed_only_on_imports(result.output)
     return failed
 
 

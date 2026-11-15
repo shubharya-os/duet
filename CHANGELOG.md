@@ -30,6 +30,32 @@
     `duet status` and the report. Agents are told there are two gates and that
     `run_gate` and `duet gate` run the fast one. Without `--final-gate`,
     nothing changes — no new events, no new prompt text.
+- The gate's time limit holds when the gate leaves a detached helper running.
+  In a real session on duet 0.18.2 (an iOS UI-test gate, `--gate-timeout 60`)
+  five gate runs were reported "timed out" but the harness got control back
+  after 60, 60, 60, 60 and 221 minutes — over six hours in timed-out gates
+  before the session ended BLOCKED; another session's single gate run took 215
+  minutes. At the limit duet stopped the gate's process group and then read its
+  output with no limit at all, and a process the gate had started in a session
+  of its own (`xcrun simctl spawn ... log stream`, a daemon, anything under
+  `setsid`/`start_new_session`) survives that stop and holds the output pipes,
+  so the read waited for it. Now:
+  - After the stop, duet reads for at most a few seconds, keeps everything the
+    gate printed (before the limit too), closes the pipes and returns. The
+    harness gets control back within the limit plus that grace, whatever the
+    gate leaves behind.
+  - duet watches the gate itself, not its pipes: a gate that finishes but
+    leaves such a helper is reported with its own exit code as soon as it
+    exits, instead of waiting for the helper and being called "timed out".
+  - Either way the gate's output ends with a note that something it started is
+    still running, so you can look at your gate script.
+  - The same bound applies to `duet gate`, the jury's walkthrough, the `fix`
+    replay and `duet build`'s "green with no tests" check — the last two now
+    run through the gate's own runner, so at the limit they stop the test
+    runner too, not just the shell above it. duet's other timed commands (git,
+    `--version` probes, sign-in checks, the agents' CLIs) use
+    `subprocess.run(timeout=...)`, which on POSIX only waits for the killed
+    child and does not read its pipes to the end, so a helper cannot hold them.
 
 ## 0.18.2
 
