@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.1
 
 - `duet status` names the round under way, not the last one finished. The
   round was taken from completed turns only (or from the last event, when it
