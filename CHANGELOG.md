@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.21.0
 
 - A task that needs files outside the workspace is refused before round 1,
   instead of after it. Two of the last four real sessions on 0.19.1 ended
