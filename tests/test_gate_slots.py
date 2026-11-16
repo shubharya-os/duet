@@ -50,11 +50,15 @@ from pathlib import Path
 out = Path(sys.argv[1])
 with out.open("a") as fh:
     fh.write("start\\n")
-deadline = time.time() + 10
+# Exits 1 if the others never turn up: meeting them is the proof they ran at
+# the same time, however slowly a runner starts processes.
+deadline = time.time() + 30
 while time.time() < deadline:
     if out.read_text(encoding="utf-8").count("start") >= int(sys.argv[2]):
         break
     time.sleep(0.05)
+else:
+    sys.exit(1)
 """
 
 # Takes a slot and holds it until it is killed.
@@ -191,11 +195,11 @@ def test_with_slots_set_to_zero_gates_run_unlimited(pool, monkeypatch):
     monkeypatch.setenv("DUET_GATE_SLOTS", "0")
     log = pool / "runs.log"
     gate = command(script(pool, TOGETHER, "together.py"), log, "3")
-    started = time.monotonic()
     results = run_together(*(workspace(pool, gate) for _ in range(3)))
+    # Each gate passes only once all three have started, so all three were
+    # running at once: none waited on another to finish. (A wall-clock bound
+    # here was flaky on windows-latest, where starting processes is slow.)
     assert all(r is not None and r.ok for r in results)
-    # All three were running at once: none waited on another to finish.
-    assert time.monotonic() - started < 8
     assert all(getattr(r, "waited", 0.0) == 0.0 for r in results)
 
 
