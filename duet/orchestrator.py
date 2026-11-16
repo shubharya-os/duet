@@ -309,6 +309,9 @@ class Orchestrator:
         self.config = config
         self.reporter = reporter or (lambda event: None)
         self.workspace = Workspace(config.root, gate=config.gate or None, gate_timeout=config.gate_timeout)
+        # Waiting for a gate slot goes into the log, so the report and `duet
+        # status` say the session is queued rather than running its gate.
+        self.workspace.slot_notify = lambda kind, **payload: self.emit(kind, **payload)
         self.state = DebateState(
             config.agent_names, max_debate=config.max_debate, stall_limit=config.stall_limit
         )
@@ -410,6 +413,8 @@ class Orchestrator:
         # What the session is doing right now, in words, for the reason a
         # stopped session gives: "during claude's turn in round 3".
         self.doing = "while starting up"
+        # What it was doing before a gate had to wait for a slot, to go back to.
+        self._doing_before_queue = self.doing
         self._round = 0
         # Set by the first stop signal; a second one during the shutdown that
         # follows exits at once rather than waiting on it.
@@ -423,6 +428,12 @@ class Orchestrator:
         elif kind in ("gate_start", "final_gate_start"):
             self.doing = ("while the %sgate was running" % ("final " if kind == "final_gate_start" else "")
                           + (" in round %d" % self._round if self._round else ""))
+        elif kind == "gate_queued":
+            self._doing_before_queue = self.doing
+            self.doing = ("while waiting for a gate slot"
+                          + (" in round %d" % self._round if self._round else ""))
+        elif kind == "gate_slot":
+            self.doing = self._doing_before_queue
         elif kind in ("turn_done", "gate_done", "gate_remembered", "final_gate_done"):
             self.doing = ("between turns in round %d" % self._round) if self._round else "while starting up"
         self.reporter(event)
@@ -514,7 +525,8 @@ class Orchestrator:
         if self.workspace.gate:
             self._last_run = (digest, result)
             self.emit("gate_done", ok=result.ok, exit_code=result.exit_code, digest=digest,
-                      timed_out=result.timed_out, timeout=result.timeout)
+                      timed_out=result.timed_out, timeout=result.timeout,
+                      waited=round(result.waited, 1))
             self._check_gate_is_read_only(digest, manifest or {})
         return result
 
@@ -554,7 +566,8 @@ class Orchestrator:
         result = self.workspace.run_gate(command)
         self._save_gate_log(digest, result, prefix="final-gate")
         self.emit("final_gate_done", ok=result.ok, exit_code=result.exit_code, digest=digest,
-                  timed_out=result.timed_out, timeout=result.timeout)
+                  timed_out=result.timed_out, timeout=result.timeout,
+                  waited=round(result.waited, 1))
         # What it writes is learned as gate output, as for the fast gate.
         self._check_gate_is_read_only(digest, manifest)
         return result

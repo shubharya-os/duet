@@ -19,6 +19,7 @@ from duet.adapters import REGISTRY
 from duet.adapters import build as build_adapter
 from duet.adapters.base import Adapter, DEFAULT_TURN_TIMEOUT, human_duration
 from duet import gate as gate_detect
+from duet import gate_slots
 from duet import build as build_cmd
 from duet import page as page_check
 from duet import workflow_commands
@@ -192,6 +193,12 @@ def make_reporter(agents: List[str], verbose: bool = True, as_json: bool = False
                 say("     " + ui.dim("fs: " + line))
         elif kind == "gate_start":
             say("     " + ui.dim("running gate: %s" % event.get("command")))
+        elif kind == "gate_queued":
+            say("     " + ui.yellow(gate_slots.describe(kind, event))
+                + ui.dim(" (not counted against --gate-timeout; DUET_GATE_SLOTS sets how many)"))
+        elif kind == "gate_slot":
+            say("     " + (ui.yellow if event.get("gave_up") else ui.dim)(
+                gate_slots.describe(kind, event)))
         elif kind == "gate_remembered" and event.get("ok") is False:
             say("     " + ui.red("gate failed (exit %s)" % event.get("exit_code")) + ui.dim(
                 " (remembered from a run on these exact files %s, %s; not re-run;"
@@ -1696,10 +1703,16 @@ def _tasklist_pid_alive(pid: int) -> Optional[bool]:
 
 
 def _what_it_was_doing(events: List[Dict[str, Any]]) -> str:
+    slotted = False
     for event in reversed(events):
         kind = event.get("kind")
         if kind == "turn_start":
             return "during %s's turn in round %s" % (event.get("agent"), event.get("round"))
+        if kind == "gate_slot":
+            # It got its slot: what follows is the gate_start before the wait.
+            slotted = True
+        if kind == "gate_queued" and not slotted:
+            return "while waiting for a gate slot"
         if kind == "gate_start":
             return "while the gate was running"
         if kind == "final_gate_start":
@@ -1714,6 +1727,8 @@ DOING_STARTING = "starting"
 DOING_TURN = "turn"
 DOING_GATE = "gate"
 DOING_FINAL_GATE = "final_gate"
+# A gate (or the final gate) waiting for a slot in the machine-wide pool.
+DOING_GATE_QUEUED = "gate_queued"
 DOING_BETWEEN = "between_turns"
 
 
@@ -1727,7 +1742,7 @@ def live_position(events: List[Dict[str, Any]]) -> Tuple[int, Optional[str], str
     that — so the agent is still named while the gate runs.
     """
     round_no, agent = 0, None
-    turn_open = gate_open = final_open = False
+    turn_open = gate_open = final_open = queued = False
     for event in events:
         kind = event.get("kind")
         if kind == "turn_start":
@@ -1739,12 +1754,17 @@ def live_position(events: List[Dict[str, Any]]) -> Tuple[int, Optional[str], str
         elif kind == "gate_start":
             gate_open = True
         elif kind == "gate_done":
-            gate_open = False
+            gate_open = queued = False
         elif kind == "final_gate_start":
             final_open = True
         elif kind == "final_gate_done":
-            final_open = False
-    doing = (DOING_FINAL_GATE if final_open else DOING_GATE if gate_open
+            final_open = queued = False
+        elif kind == "gate_queued":
+            queued = True
+        elif kind == "gate_slot":
+            queued = False
+    doing = (DOING_GATE_QUEUED if queued and (gate_open or final_open)
+             else DOING_FINAL_GATE if final_open else DOING_GATE if gate_open
              else DOING_TURN if turn_open else DOING_BETWEEN if round_no else DOING_STARTING)
     return round_no, (agent if turn_open else None), doing
 
@@ -1759,6 +1779,8 @@ def _describe_doing(doing: str, agent: Optional[str], round_no: int) -> str:
         return "the gate is running" + ("" if round_no else " (opening check)")
     if doing == DOING_FINAL_GATE:
         return "the final gate is running"
+    if doing == DOING_GATE_QUEUED:
+        return "waiting for a gate slot (other duet gates are running on this machine)"
     if doing == DOING_BETWEEN:
         return "between turns"
     return "starting up"

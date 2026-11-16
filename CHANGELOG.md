@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+- Gate slots: a machine-wide limit on how many duet gates run at once, so
+  gates stop timing each other out. Measured on 122 real gate runs on duet
+  0.17–0.19.1 across a dozen projects on one machine (mostly iOS gates building
+  with xcodebuild and testing in simulators): with no other duet gate running
+  at the same time, 2 of 33 runs timed out (6%); with 1 other, 3 of 17 (18%);
+  with 2–3 others, 2 of 36 (6%); with 4 or more others, 21 of 36 (58%). Five
+  sessions ended BLOCKED on a gate that kept running out of time at load
+  averages in the hundreds — seven sessions had been started within 50
+  minutes of each other.
+  - Every gate run — the harness's gate, the final gate, `duet gate`, the
+    workflow replays, `build`'s red-before-code check, page gates — takes a slot
+    from a pool shared by all of the user's duet processes, and gives it back
+    however the run ends. Slots are files under `~/.duet/gate-slots/` (or
+    `$DUET_HOME/gate-slots/`) held with OS file locks (flock on POSIX, msvcrt on
+    Windows), so a crashed or killed process never keeps one. No daemon.
+  - 3 slots by default; `DUET_GATE_SLOTS=N` to change it, `0` for no limit.
+    duet has no user-level config file, so the environment is the one place.
+  - Waiting is not counted against `--gate-timeout`. The terminal shows one line
+    ("waiting for a gate slot: 3 duet gates are running on this machine"); the
+    log gets `gate_queued` (how many were running) and `gate_slot` (how long it
+    waited), and `gate_done`/`final_gate_done` carry `waited`. `duet status`
+    says the session is waiting for a slot (`doing: gate_queued` in `--json`).
+  - A gate never waits more than 3 hours: then it runs anyway and says so. The
+    harness holds no slot during an agent's turn, so `duet gate` cannot
+    deadlock against it, and a gate run from inside a gate takes none.
+
+
 ## 0.19.1
 
 - `duet status` names the round under way, not the last one finished. The

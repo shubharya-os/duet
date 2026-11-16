@@ -858,6 +858,26 @@ reported as exactly that — "the gate ran out of time; this is not a test failu
 to you and to both agents — so nobody goes looking for a failing test that does not
 exist. It still is not a pass: a session cannot end on a gate that never finished.
 
+Gates share the machine, so they take turns. Every gate run duet makes — the
+harness's gate, the final gate, `duet gate`, the `fix`/`add`/`refactor` replays,
+`build`'s red-before-code check, a page gate — first takes a slot from a pool shared
+by all of your duet processes, 3 by default. Measured on 122 gate runs on duet
+0.17–0.19.1 across a dozen projects on one machine (mostly xcodebuild and simulator
+gates): with no other duet gate running alongside, 2 of 33 runs timed out (6%); with
+1 other, 3 of 17 (18%); with 2–3 others, 2 of 36 (6%); with 4 or more others, 21 of 36
+(58%). A gate that finds the pool full waits, and the terminal says so in one line —
+"waiting for a gate slot: 3 duet gates are running on this machine" — with a
+`gate_queued` event in the log (and the wait on `gate_done`), so `duet status` reads
+"waiting for a gate slot" rather than "the gate is running". The wait is not
+counted against `--gate-timeout`: the limit starts when the gate does. A gate never
+waits more than 3 hours; after that it runs anyway and says so. `DUET_GATE_SLOTS=N`
+sets the pool size, and `DUET_GATE_SLOTS=0` turns the limit off. The slots are files
+under `~/.duet/gate-slots/` (`$DUET_HOME/gate-slots/` if set), each held with an OS
+file lock while a gate runs, so a process that crashes or is killed can never keep
+one — there is no daemon. The harness holds a slot only while its own gate runs,
+never during an agent's turn, so an agent's `duet gate` cannot deadlock against it;
+a gate started from inside a gate takes none.
+
 The gate runs when it decides something: before round one, after a turn that votes
 DONE or BLOCKED, before any sign-off is counted, and once at the end for the report.
 After a turn that says CONTINUE it is deferred — the terminal and the report say
