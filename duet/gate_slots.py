@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -55,9 +56,20 @@ Notify = Callable[..., None]
 
 
 def state_dir() -> Path:
-    """The user's duet state directory: $DUET_HOME, or ~/.duet."""
+    """The user's duet state directory: $DUET_HOME, or ~/.duet.
+
+    Where no home directory can be found (Windows with neither USERPROFILE nor
+    HOME set raises RuntimeError), a per-user folder in the system temp
+    directory: a gate must never fail because the slot pool had nowhere to live.
+    """
     home = os.environ.get("DUET_HOME", "").strip()
-    return Path(home).expanduser() if home else Path.home() / ".duet"
+    if home:
+        return Path(home).expanduser()
+    try:
+        return Path.home() / ".duet"
+    except (RuntimeError, KeyError, OSError):
+        user = os.environ.get("USERNAME") or os.environ.get("USER") or "user"
+        return Path(tempfile.gettempdir()) / ("duet-" + user)
 
 
 def slots_dir() -> Path:

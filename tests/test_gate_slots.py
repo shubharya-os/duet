@@ -271,3 +271,20 @@ def test_duet_gate_takes_a_slot(pool, monkeypatch, capfd):
 
 def _json(value):
     return json.dumps(value)
+
+
+def test_no_home_directory_falls_back_to_a_temp_folder(monkeypatch, tmp_path):
+    """Windows with neither USERPROFILE nor HOME makes Path.home() raise; a gate
+    must still run (`duet demo` in a bare environment failed on windows-latest)."""
+    from pathlib import Path
+    from duet import gate_slots
+    monkeypatch.delenv("DUET_HOME", raising=False)
+    monkeypatch.setattr(gate_slots.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    def no_home():
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(Path, "home", staticmethod(no_home))
+    assert gate_slots.state_dir().parent == tmp_path
+    with gate_slots.gate_slot(size=1):
+        pass
