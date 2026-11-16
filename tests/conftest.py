@@ -48,6 +48,17 @@ def _outside_a_duet_session(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _own_duet_home(tmp_path_factory, monkeypatch):
+    """No test takes a gate slot from the real ~/.duet pool.
+
+    Every gate run takes a slot from a pool shared by all of this user's duet
+    processes (duet/gate_slots.py). A test that ran a gate against the real one
+    would wait behind — and hold up — the sessions this suite is run from.
+    """
+    monkeypatch.setenv("DUET_HOME", str(tmp_path_factory.getbasetemp() / "duet-home"))
+
+
+@pytest.fixture(autouse=True)
 def _no_backoff_sleeping(monkeypatch):
     """The suite never sleeps through the transient-failure backoff.
 

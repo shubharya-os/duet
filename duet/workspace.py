@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from duet.adapters.base import human_duration
+from duet import gate_slots
 from duet.config import DEFAULT_GATE_TIMEOUT
 
 SKIP_DIRS = {
@@ -209,6 +210,9 @@ class GateResult:
     # had changed: the one-line warning that the earlier failure may have been
     # the machine, not the code. See Orchestrator.gate_for.
     flaky: str = ""
+    # Seconds spent waiting for a gate slot before it ran (duet/gate_slots.py).
+    # Not part of `duration`, and never counted against the time limit.
+    waited: float = 0.0
     # Set when the gate was deliberately not run on this state: the turn that
     # produced it said CONTINUE, so nobody can sign it off yet. Not `skipped`,
     # which means "no gate configured" and counts as green — a deferred gate is
@@ -306,6 +310,9 @@ class Workspace:
         self.root.mkdir(parents=True, exist_ok=True)
         self.gate = gate
         self.gate_timeout = gate_timeout
+        # Told when a gate has to wait for a slot and when it stops waiting
+        # (gate_slots.Notify); unset, it says so on stderr.
+        self.slot_notify: Optional[gate_slots.Notify] = None
         # Paths the gate itself writes (files, or whole directories it
         # created), learned by watching it run. Left out of the state id, so a
         # gate that writes build output does not move it on every run. What may
@@ -758,6 +765,14 @@ class Workspace:
         command = command or self.gate
         if not command:
             return GateResult(command="", ok=True, exit_code=0, output="", skipped=True)
+        # A slot from the machine-wide pool first (duet/gate_slots.py); the
+        # time limit starts once it has one, so waiting is never a time-out.
+        with gate_slots.gate_slot(self.slot_notify) as slot:
+            result = self._run_command(command)
+        result.waited = slot.waited
+        return result
+
+    def _run_command(self, command: str) -> GateResult:
         started = time.monotonic()
         try:
             # Its own process group, so stopping the gate stops the test runner
