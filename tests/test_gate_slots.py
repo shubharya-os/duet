@@ -44,19 +44,6 @@ with out.open("a") as fh:
 
 # Waits (up to 10s) for `n` runs to have started before it ends: only runs
 # that are allowed to overlap all get there quickly.
-TOGETHER = """
-import sys, time
-from pathlib import Path
-out = Path(sys.argv[1])
-with out.open("a") as fh:
-    fh.write("start\\n")
-deadline = time.time() + 10
-while time.time() < deadline:
-    if out.read_text(encoding="utf-8").count("start") >= int(sys.argv[2]):
-        break
-    time.sleep(0.05)
-"""
-
 # Takes a slot and holds it until it is killed.
 HOLDER = """
 import time
@@ -188,15 +175,24 @@ def test_a_gate_that_never_gets_a_slot_runs_anyway_and_says_so(pool, monkeypatch
 
 
 def test_with_slots_set_to_zero_gates_run_unlimited(pool, monkeypatch):
+    """0 turns the pool off: any number of gates hold a "slot" at once, nobody
+    waits, and the pool is never touched. Checked without processes or clocks
+    (a timed version was flaky on windows-latest, where processes start slowly)."""
+    from duet import gate_slots
     monkeypatch.setenv("DUET_GATE_SLOTS", "0")
-    log = pool / "runs.log"
-    gate = command(script(pool, TOGETHER, "together.py"), log, "3")
-    started = time.monotonic()
-    results = run_together(*(workspace(pool, gate) for _ in range(3)))
-    assert all(r is not None and r.ok for r in results)
-    # All three were running at once: none waited on another to finish.
-    assert time.monotonic() - started < 8
-    assert all(getattr(r, "waited", 0.0) == 0.0 for r in results)
+
+    def never(*args, **kwargs):
+        raise AssertionError("the pool was used with DUET_GATE_SLOTS=0")
+
+    monkeypatch.setattr(gate_slots, "_take", never)
+    notices = []
+    with gate_slots.gate_slot(notify=lambda kind, **kw: notices.append(kind)) as one, \
+            gate_slots.gate_slot(notify=lambda kind, **kw: notices.append(kind)) as two, \
+            gate_slots.gate_slot(notify=lambda kind, **kw: notices.append(kind)) as three:
+        held = [one, two, three]
+    assert all(s.waited == 0.0 and not s.queued for s in held)
+    assert notices == []
+    assert not gate_slots.slots_dir().exists()
 
 
 # -- what the user sees --------------------------------------------------------
