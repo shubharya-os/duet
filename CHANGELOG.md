@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.0
 
 - Gate slots: a machine-wide limit on how many duet gates run at once, so
   gates stop timing each other out. Measured on 122 real gate runs on duet
