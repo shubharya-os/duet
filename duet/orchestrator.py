@@ -1466,6 +1466,8 @@ class Orchestrator:
             started_with=cfg.started_with or None,
             # Only when there is one: a session without it logs as it always has.
             **({"final_gate": cfg.final_gate} if cfg.final_gate else {}),
+            # Started with --allow-outside: the scope check was skipped.
+            **({"allow_outside": True} if cfg.allow_outside else {}),
         )
         previous = self._install_stop_handlers()
         try:

@@ -177,6 +177,9 @@ class Config:
     # remembers a pass for these files and this command. Set per invocation —
     # `duet resume` takes it from its own flags, not from the saved session.
     fresh_gate: bool = False
+    # `--allow-outside`: the session was started although its task names files
+    # outside the workspace (see duet/scope.py). Recorded in session_start.
+    allow_outside: bool = False
     # The arguments `duet` was started with for this session, without
     # --detach. A session that dies before its first save leaves nothing to
     # resume, and `duet status` offers this to start it again instead.
