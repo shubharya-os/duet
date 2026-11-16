@@ -26,6 +26,7 @@ from duet import workflow_commands
 from duet import from_ecc
 from duet import jury
 from duet import make as make_cmd
+from duet import scope
 from duet.plugin_files import skill_template
 from duet import winlaunch
 from duet.winlaunch import command as launchable
@@ -86,6 +87,14 @@ DETACH_HELP = (
     "down. Follow it with: duet status <id>  or  tail -f <log> "
     "(Get-Content -Wait <log> on Windows)."
 )
+
+ALLOW_OUTSIDE_HELP = (
+    "start even though the task names files outside the workspace (-C). By "
+    "default duet refuses, because the agents may only touch files inside it."
+)
+
+# The commands that start a session, and so get the scope check before it.
+SESSION_COMMANDS = ("run", "build", "fix", "add", "refactor", "plan", "make")
 
 
 # --------------------------------------------------------------------------
@@ -312,6 +321,8 @@ def read_task(args: argparse.Namespace) -> str:
         return Path(args.file).expanduser().read_text(encoding="utf-8")
     task = " ".join(args.task or []).strip()
     if task == "-" or (not task and not sys.stdin.isatty()):
+        if hasattr(args, "_scope_stdin"):
+            return args._scope_stdin
         return sys.stdin.read()
     return task
 
@@ -327,7 +338,7 @@ def read_context(args: argparse.Namespace) -> str:
     path = getattr(args, "context_file", None)
     if path:
         if str(path) == "-":
-            parts.append(sys.stdin.read())
+            parts.append(args._scope_stdin if hasattr(args, "_scope_stdin") else sys.stdin.read())
         else:
             try:
                 parts.append(Path(path).expanduser().read_text(encoding="utf-8"))
@@ -429,6 +440,8 @@ def build_config(args: argparse.Namespace) -> Config:
     if getattr(args, "allow_run", ""):
         cfg.allow_run = args.allow_run
     cfg.fresh_gate = bool(getattr(args, "fresh_gate", False))
+    if getattr(args, "allow_outside", False):
+        cfg.allow_outside = True
     cfg.started_with = [a for a in getattr(args, "started_with", None) or [] if a != "--detach"]
     if getattr(args, "gate_every_turn", False):
         cfg.gate_every_turn = True
@@ -472,6 +485,85 @@ def refuse_nested(command: str, args: argparse.Namespace) -> Optional[int]:
     print("  Do the work yourself and report it in your envelope.")
     print(ui.dim("  If you really mean it: ") + ui.bold("duet %s --allow-nested" % command))
     return 4
+
+
+def _scope_text(args: argparse.Namespace) -> str:
+    """The task and its context as the user gave them, for the scope check.
+
+    Stdin is captured once here when it supplies task or context text, then
+    reused by the session so the check sees exactly what the agents will. Not
+    under --detach: the detached child's stdin is DEVNULL, so nothing read here
+    would reach the session, and `--detach` promises to return at once.
+    """
+    parts: List[str] = []
+    detach = getattr(args, "detach", False)
+    task = " ".join(getattr(args, "task", None) or []).strip()
+    task_from_stdin = (not detach and getattr(args, "command", None) == "run"
+                       and not getattr(args, "file", None)
+                       and (task == "-" or (not task and not sys.stdin.isatty())))
+    context_from_stdin = not detach and str(getattr(args, "context_file", "")) == "-"
+    if (task_from_stdin or context_from_stdin) and not hasattr(args, "_scope_stdin"):
+        args._scope_stdin = sys.stdin.read()
+    for name in ("task", "idea", "what"):
+        words = getattr(args, name, None) or []
+        if " ".join(words).strip() != "-":
+            parts += words
+    if task_from_stdin:
+        parts.append(args._scope_stdin)
+    if context_from_stdin:
+        parts.append(args._scope_stdin)
+    for name in ("file", "context_file"):
+        path = getattr(args, name, None)
+        if path and str(path) != "-":
+            try:
+                parts.append(Path(path).expanduser().read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError):
+                pass   # the session reports an unreadable file itself
+    if getattr(args, "context", None):
+        parts.append(str(args.context))
+    return "\n".join(parts)
+
+
+def refuse_outside(args: argparse.Namespace, argv: Sequence[str]) -> Optional[int]:
+    """Stop a session whose task names files outside its workspace, before it starts.
+
+    The agents may only touch files inside the workspace. Started in a
+    subfolder (`-C repo/studio`) on a task that needs `../deploy/.env.example`,
+    both agents spend their rounds being refused and then vote BLOCKED, since
+    only the user can grant the access: two of four real sessions on 0.19.1
+    ended that way. Here it costs nothing — no agent has run, no gate either —
+    and the fix is a command to paste: the same one, with -C set wide enough.
+    """
+    if getattr(args, "allow_outside", False):
+        return None
+    root = str(Path(getattr(args, "root", ".")).expanduser().resolve())
+    if not Path(root).is_dir():
+        return None   # left for the command itself to report
+    text = _scope_text(args)
+    if not scope.mentions(text):
+        return None   # nothing that could be a path: no need to ask git
+    found = scope.outside(text, root, scope.git_top(root))
+    if not found:
+        return None
+    wider = scope.suggested_root(root, [path for _, path in found])
+    print(ui.red("✗ ") + "the task names %s outside the workspace, and the agents may only "
+          "touch files inside it:" % ("a file" if len(found) == 1 else "files"))
+    for mention, path in found:
+        print("    " + ui.bold(mention) + (ui.dim("  →  " + path) if mention != path else ""))
+    print(ui.dim("  workspace: ") + root)
+    print()
+    print("  Started here, both agents would be refused those files and end the session")
+    print("  BLOCKED, since only you can grant the access. Run it from a directory that")
+    print("  holds them all:")
+    new_argv = scope.with_root(argv, wider)
+    if winlaunch.WINDOWS:
+        command = subprocess.list2cmdline(new_argv)
+    else:
+        command = " ".join(shlex.quote(a) for a in new_argv)
+    print("    " + ui.bold("duet " + command))
+    print(ui.dim("  If the task does not need them after all, add ") + ui.bold("--allow-outside")
+          + ui.dim("."))
+    return 3
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -3090,6 +3182,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--commit", action="store_true", help="git-commit the result when both sign off")
     p_run.add_argument("--allow-nested", action="store_true",
                        help="permit starting this from inside another duet session")
+    p_run.add_argument("--allow-outside", action="store_true", help=ALLOW_OUTSIDE_HELP)
     p_run.add_argument("--detach", action="store_true", help=DETACH_HELP)
     p_run.set_defaults(func=cmd_run)
 
@@ -3125,6 +3218,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--commit", action="store_true", help="git-commit the result when both sign off")
         p.add_argument("--allow-nested", action="store_true",
                        help="permit starting this from inside another duet session")
+        p.add_argument("--allow-outside", action="store_true", help=ALLOW_OUTSIDE_HELP)
         p.add_argument("--detach", action="store_true", help=DETACH_HELP)
 
     def jury_args(p: argparse.ArgumentParser) -> None:
@@ -3529,6 +3623,12 @@ def main(argv: Optional[List[str]] = None) -> int:
               + ui.dim("  runs the whole loop offline, no keys, no network"))
         return 0
     try:
+        # Before --detach, so whoever started it sees the refusal, and before
+        # the command runs, so no gate is spent (`refactor` runs one at once).
+        if args.command in SESSION_COMMANDS:
+            outside = refuse_outside(args, raw_argv)
+            if outside is not None:
+                return outside
         if getattr(args, "detach", False):
             return cmd_detach(raw_argv, args)
         return int(args.func(args))

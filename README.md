@@ -842,7 +842,32 @@ duet sessions        # every session in this workspace
 Useful flags for `run`: `--gate` (your tests — the most valuable one), `--pair`,
 `--rounds`, `--turn-timeout MINUTES`, `--gate-timeout MINUTES`, `--fresh-gate`, `--gate-every-turn`, `--final-gate CMD`, `--accept "what done means"`, `--swap N` to
 trade places, `--commit`, `--json`, `--detach` (run it as its own process and
-return at once — see "Surviving the thing that launched it" below).
+return at once — see "Surviving the thing that launched it" below),
+`--allow-outside` (see "The workspace" below).
+
+### The workspace
+
+The workspace is the current directory, or the one `-C DIR` names, and the agents
+may only touch files inside it. So before anything runs — no agent, no gate — duet
+reads the task (and `--context`/`--context-file`, `-f`) for paths, and refuses to
+start when one names something that exists outside the workspace and not inside
+it: `../deploy/.env.example`, or `deploy/docker-compose.yml` when that is only at
+the top of the git repository the workspace is in. It prints those paths, the
+workspace, and the same command with `-C` set to the nearest directory that holds
+them all — normally the repository's top level — and exits 3. With `--detach` it
+refuses before detaching, so you see it.
+
+Two of the last four sessions on 0.19.1 were started in a subfolder of a
+repository (`-C .../shop/studio`) on a task that needed a file beside it;
+both agents were refused that file for every round and the session ended
+BLOCKED, because granting the access was the user's call.
+
+Words that only look like paths do not count: a path counts only if it exists, so
+`e.g.`, `v1.2` and `node.js` never do, nor do URLs. Absolute paths count only
+inside the repository — `/usr/bin/env` is a tool, not a file to edit. A task or
+context piped on stdin is checked too (except with `--detach`, whose session
+never reads stdin). When you know better, `--allow-outside`
+starts anyway, and the session's `session_start` event records `allow_outside`.
 
 ### The clock, and the network
 

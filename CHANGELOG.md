@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+- A task that needs files outside the workspace is refused before round 1,
+  instead of after it. Two of the last four real sessions on 0.19.1 ended
+  BLOCKED for this one reason: started in a subfolder of a repository
+  (`-C .../shop/studio`, `-C .../shop/sdk`) on a task that
+  needed files beside it (`../deploy/.env.example`,
+  `../examples/bring-your-own-agent.ts`), both agents were refused those files
+  for every round and then voted BLOCKED, since only the user could grant the
+  access.
+  - `run`, `build`, `fix`, `add`, `refactor`, `plan` and `make` read the task,
+    `-f`, `--context` and `--context-file` for paths before anything runs — no
+    agent, no gate (`refactor`'s opening gate included), and before `--detach`
+    detaches, so the caller sees the refusal.
+  - A path is out of scope when it exists outside the workspace and not inside
+    it: relative to the workspace, and for a bare `a/b` also relative to the
+    top level of the git repository the workspace is in. URLs, globs that match
+    nothing, paths that do not exist, words like `e.g.`, `v1.2` and `node.js`,
+    and absolute paths outside the repository (`/usr/bin/env`) never count.
+  - The refusal names each path, the workspace, and the same command with `-C`
+    set to the nearest directory holding them all — normally the repository's
+    top level — and exits 3, like duet's other setup refusals.
+  - `--allow-outside` starts anyway, and `session_start` records
+    `allow_outside: true`.
+
 ## 0.20.0
 
 - Gate slots: a machine-wide limit on how many duet gates run at once, so
